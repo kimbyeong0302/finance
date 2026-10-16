@@ -47,6 +47,7 @@ async function init() {
 async function onOpen() {
   state.lastOpenCheck = Date.now();
   state.today = todayStr();
+  $('#todayLabel').textContent = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' });
   const settled = await runPendingSettlements(state.today);
   await ensureMonth(ymOf(state.today));
   await refresh();
@@ -81,11 +82,11 @@ async function refresh() {
 
 // ───────────────────────── 예산 막대 ─────────────────────────
 
-function barColor(ratio) {
-  if (ratio < 0) return 'var(--red)';
-  if (ratio >= 0.5) return 'var(--green)';
-  if (ratio >= 0.2) return 'var(--orange)';
-  return 'var(--orange-dark)';
+function barStatus(ratio) {
+  if (ratio < 0) return 'over';
+  if (ratio >= 0.5) return 'ok';
+  if (ratio >= 0.2) return 'warn';
+  return 'low';
 }
 
 async function renderBudget() {
@@ -94,7 +95,15 @@ async function renderBudget() {
   $('#budgetTitle').textContent = `${Number(ym.slice(5))}월 예산`;
   const totalLeft = view.reduce((s, v) => s + v.left, 0);
   const totalFinal = view.reduce((s, v) => s + v.final, 0);
-  $('#budgetSum').textContent = `남은 ${won(totalLeft)} / ${won(totalFinal)}`;
+  $('#budgetLeft').textContent = won(totalLeft);
+  $('#budgetLeft').classList.toggle('neg', totalLeft < 0);
+  $('#budgetOf').textContent = `/ ${won(totalFinal)}`;
+
+  // 흐름 안내: 이번 달 그대로 끝나면 얼마가 저축으로 가는지
+  const s = await previewSettlement(ym);
+  $('#flowToSaving').innerHTML = s.net >= 0
+    ? `지금대로면 월말에 <b>${won(s.net)}</b>이 저축으로`
+    : `지금대로면 <b class="neg">${won(-s.net)}</b> 부족 → 다음 달 감액`;
 
   const box = $('#budgetBars');
   if (!view.length) {
@@ -104,16 +113,19 @@ async function renderBudget() {
   box.innerHTML = view.map((v) => {
     const over = v.left < 0;
     const ratio = v.final > 0 ? v.left / v.final : (v.used > 0 ? -1 : 0);
+    const status = barStatus(over ? -1 : ratio);
     const h = over ? 0 : Math.max(0, Math.min(1, ratio)) * 100;
+    const pct = over ? '초과' : `${Math.round(Math.max(0, ratio) * 100)}%`;
     return `
-      <button class="bar ${over ? 'over' : ''}" data-cat="${v.category.id}" aria-label="${esc(v.category.name)} 지출 입력">
-        <div class="bar-track">
-          <div class="bar-fill" style="height:${h}%;background:${barColor(over ? -1 : ratio)}"></div>
-          ${over ? `<div class="bar-over-text">${num(-v.left)} 초과</div>` : ''}
-        </div>
-        <div class="bar-name">${esc(v.category.name)}</div>
-        <div class="bar-left" style="color:${over ? 'var(--red)' : 'inherit'}">${over ? '−' : ''}${num(Math.abs(v.left))}</div>
-        ${v.cut > 0 ? `<div class="bar-cut">지난달 초과로 ${num(v.cut)}원 감액</div>` : ''}
+      <button class="bar ${status}" data-cat="${v.category.id}" aria-label="${esc(v.category.name)} 지출 입력">
+        <span class="bar-pct">${pct}</span>
+        <span class="bar-track">
+          <span class="bar-fill" style="height:${h}%"></span>
+          ${over ? `<span class="bar-over-text">−${shortWon(-v.left)}</span>` : ''}
+        </span>
+        <span class="bar-name"><i style="background:${esc(v.category.color)}"></i>${esc(v.category.name)}</span>
+        <span class="bar-left">${over ? '−' : ''}${num(Math.abs(v.left))}</span>
+        ${v.cut > 0 ? `<span class="bar-cut" title="지난달 초과로 ${num(v.cut)}원 감액">감액 ${shortWon(v.cut)}</span>` : ''}
       </button>`;
   }).join('');
 }
@@ -125,24 +137,30 @@ async function renderSavings() {
   const limit = Number(await getSetting('savingsLimit', 0)) || 0;
   const fill = $('#savingFill');
   const overEl = $('#savingOver');
-  const bar = $('#savingBar');
+  const card = $('#savingCard');
+  $('#savingBalance').textContent = won(balance);
+  card.classList.remove('deep', 'full', 'overflow');
   if (!limit) {
     fill.style.height = balance > 0 ? '100%' : '0%';
-    fill.style.background = 'var(--save)';
     overEl.style.height = '0';
-    bar.classList.remove('overflow');
-    $('#savingLabel').innerHTML = `${num(balance)}원<br><span class="muted">한도 미설정</span>`;
+    $('#savingPct').textContent = '';
+    $('#savingMeta').textContent = '설정에서 저축 한도를 정하세요';
+    $('#flowToInvest').textContent = '한도를 넘은 저축은 투자로';
     return;
   }
   const ratio = balance / limit;
-  fill.style.height = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
-  fill.style.background = ratio >= 1 ? 'var(--save-full)' : ratio >= 0.8 ? 'var(--save-deep)' : 'var(--save)';
   const overflow = balance - limit;
-  // 넘친 부분은 막대 위로 (최대 막대 높이의 1/3까지만 그린다)
-  overEl.style.height = overflow > 0 ? `${Math.max(8, Math.min(60, (overflow / limit) * 180))}px` : '0';
-  bar.classList.toggle('overflow', overflow > 0);
-  $('#savingLabel').innerHTML = `${num(balance)}원<br><span class="muted">/ ${num(limit)}</span>`
-    + (overflow > 0 ? `<br><span style="color:var(--save-full)">+${num(overflow)} 초과</span>` : '');
+  fill.style.height = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
+  if (ratio >= 1) card.classList.add('full');
+  else if (ratio >= 0.8) card.classList.add('deep');
+  if (overflow > 0) card.classList.add('overflow');
+  // 넘친 부분은 막대 위로 (최대 40px)
+  overEl.style.height = overflow > 0 ? `${Math.max(8, Math.min(40, (overflow / limit) * 160))}px` : '0';
+  $('#savingPct').textContent = `${Math.round(ratio * 100)}%`;
+  $('#savingMeta').textContent = `한도 ${won(limit)}`;
+  $('#flowToInvest').innerHTML = overflow > 0
+    ? `<b class="purple">${won(overflow)}</b> 초과 — 투자로 옮길 차례`
+    : `한도까지 ${won(limit - balance)} 남음 · 넘으면 투자로`;
 }
 
 // ───────────────────────── 투자 꺾은선 ─────────────────────────
@@ -157,10 +175,17 @@ function cssVar(name) {
 }
 
 function shortWon(v) {
-  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(1)}억`;
+  if (Math.abs(v) >= 1e8) return `${Number((v / 1e8).toFixed(1))}억`;
   if (Math.abs(v) >= 1e6) return `${Math.round(v / 1e4).toLocaleString('ko-KR')}만`;
   if (Math.abs(v) >= 1e4) return `${Number((v / 1e4).toFixed(1))}만`;
   return num(v);
+}
+
+// 한국 증시 관례: 상승 빨강, 하락 파랑
+function gainText(gain, principal) {
+  const pct = principal ? (gain / principal) * 100 : 0;
+  const sign = gain > 0 ? '+' : gain < 0 ? '−' : '';
+  return `${sign}${num(Math.abs(gain))}원 (${sign}${Math.abs(pct).toFixed(1)}%)`;
 }
 
 async function renderInvest() {
@@ -169,17 +194,31 @@ async function renderInvest() {
   $('.chart-wrap').hidden = !series.length;
   const last = latestPoint(series);
   const gain = last.value - last.principal;
-  $('#investGain').textContent = series.length
-    ? `${gain >= 0 ? '+' : '−'}${num(Math.abs(gain))}원 (${last.principal ? ((gain / last.principal) * 100).toFixed(1) : '0.0'}%)`
-    : '';
-  $('#investGain').style.color = gain >= 0 ? 'var(--green)' : 'var(--red)';
+  $('#investValue').textContent = won(last.value);
+  $('#investPrincipal').textContent = series.length ? `원금 ${won(last.principal)}` : '';
+  const g = $('#investGain');
+  g.textContent = series.length ? gainText(gain, last.principal) : '';
+  g.className = `gain ${gain > 0 ? 'up' : gain < 0 ? 'down' : ''}`;
 
   const labels = series.map((p) => dayLabel(p.date, '0000-00-00'));
+  const valueColor = cssVar('--invest');
   const data = {
     labels,
     datasets: [
-      { label: '원금', data: series.map((p) => p.principal), borderColor: cssVar('--principal'), borderDash: [4, 4], stepped: true, pointRadius: 0, borderWidth: 2 },
-      { label: '평가액', data: series.map((p) => p.value), borderColor: cssVar('--value'), backgroundColor: 'transparent', pointRadius: series.length > 40 ? 0 : 2, borderWidth: 2.5, tension: 0.2 },
+      {
+        label: '평가액', data: series.map((p) => p.value), borderColor: valueColor, borderWidth: 2.5, tension: 0.3,
+        pointRadius: series.length > 30 ? 0 : 3, pointBackgroundColor: valueColor, pointBorderWidth: 0,
+        fill: 'origin',
+        backgroundColor: (ctx) => {
+          const { chart } = ctx;
+          if (!chart.chartArea) return 'transparent';
+          const grad = chart.ctx.createLinearGradient(0, chart.chartArea.top, 0, chart.chartArea.bottom);
+          grad.addColorStop(0, cssVar('--invest-soft'));
+          grad.addColorStop(1, 'rgba(0,0,0,0)');
+          return grad;
+        },
+      },
+      { label: '원금', data: series.map((p) => p.principal), borderColor: cssVar('--principal'), borderDash: [5, 4], stepped: true, pointRadius: 0, borderWidth: 1.5, fill: false },
     ],
   };
   if (state.chart) {
@@ -193,15 +232,24 @@ async function renderInvest() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      animation: { duration: 300 },
+      animation: { duration: 400 },
       interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 4 } },
       plugins: {
-        legend: { display: true, position: 'bottom', labels: { boxWidth: 12, color: cssVar('--muted'), font: { size: 11 } } },
-        tooltip: { callbacks: { label: (c) => `${c.dataset.label} ${won(c.parsed.y)}` } },
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: cssVar('--ink'), titleColor: cssVar('--ink-on'), bodyColor: cssVar('--ink-on'),
+          padding: 10, cornerRadius: 10, displayColors: false,
+          callbacks: { label: (c) => `${c.dataset.label} ${won(c.parsed.y)}` },
+        },
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 4, color: cssVar('--muted'), font: { size: 10 } }, grid: { display: false } },
-        y: { grace: '10%', ticks: { maxTicksLimit: 4, color: cssVar('--muted'), font: { size: 10 }, callback: (v) => shortWon(v) }, grid: { color: cssVar('--line') } },
+        x: { border: { display: false }, ticks: { maxTicksLimit: 4, color: cssVar('--muted'), font: { size: 11 } }, grid: { display: false } },
+        y: {
+          position: 'right', grace: '10%', border: { display: false },
+          ticks: { maxTicksLimit: 4, color: cssVar('--muted'), font: { size: 11 }, callback: (v) => shortWon(v) },
+          grid: { color: cssVar('--line') },
+        },
       },
     },
   });
@@ -210,8 +258,14 @@ async function renderInvest() {
 async function renderTotal() {
   const balance = await savingsBalance();
   const value = latestPoint(await investSeries()).value;
-  $('#total').textContent = won(balance + value);
-  $('#totalSub').textContent = `저축 ${won(balance)} · 투자 ${won(value)}`;
+  const total = balance + value;
+  $('#total').textContent = num(total);
+  $('#legendSaving').textContent = won(balance);
+  $('#legendInvest').textContent = won(value);
+  const share = total > 0 ? Math.max(0, balance) / (Math.max(0, balance) + Math.max(0, value)) : 0.5;
+  $('#mixSaving').style.flexGrow = total > 0 ? share : 1;
+  $('#mixInvest').style.flexGrow = total > 0 ? 1 - share : 1;
+  $('#mix').classList.toggle('empty', total <= 0);
 }
 
 // ───────────────────────── 하단 시트 공통 ─────────────────────────
@@ -251,7 +305,7 @@ function koreanAmount(n) {
 
 function chipsHTML(selectedId) {
   return state.categories.map((c) => `
-    <button class="chip ${c.id === selectedId ? 'selected' : ''}" data-cat="${c.id}" style="--chip:${esc(c.color)}">${esc(c.name)}</button>`).join('');
+    <button class="chip ${c.id === selectedId ? 'selected' : ''}" data-cat="${c.id}" style="--chip:${esc(c.color)}"><i></i>${esc(c.name)}</button>`).join('');
 }
 
 // ───────────────────────── 지출 입력 ─────────────────────────
@@ -260,7 +314,8 @@ function chipsHTML(selectedId) {
 function openExpenseSheet(categoryId = null) {
   let selected = categoryId;
   const sheet = openSheet(`
-    <input class="amount-input" id="exAmount" inputmode="numeric" pattern="[0-9]*" placeholder="금액" autocomplete="off" enterkeyhint="done">
+    <h4>지출</h4>
+    <label class="amount-wrap"><input class="amount-input" id="exAmount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off" enterkeyhint="done"><span>원</span></label>
     <div class="amount-hint" id="exHint"></div>
     <div class="chips" id="exFreq"></div>
     <div class="chips" id="exCats">${chipsHTML(selected)}</div>
@@ -334,12 +389,13 @@ function catName(id) {
 }
 
 function describe(e) {
-  if (e.status === 'noAmount') return `<div class="bad">금액을 찾지 못했습니다: “${esc(e.raw)}”</div>`;
-  const cat = e.status === 'ok' ? catName(e.categoryId)
-    : e.status === 'ambiguous' ? `항목 선택 필요 (${e.candidates.map(catName).join('/')})` : '항목 선택 필요';
-  const parts = [cat, won(e.amount), dayLabel(e.date, state.today)];
-  if (e.memo) parts.push(e.memo);
-  return `<div class="${e.status === 'ok' ? '' : 'bad'}">${parts.map(esc).join(' · ')}</div>`;
+  if (e.status === 'noAmount') return `<div class="pv bad"><span class="pv-tag">?</span>금액을 찾지 못했어요 · “${esc(e.raw)}”</div>`;
+  const ok = e.status === 'ok';
+  const cat = ok ? state.categories.find((c) => c.id === e.categoryId) : null;
+  const tag = ok ? `<span class="pv-tag" style="--chip:${esc(cat?.color)}">${esc(cat?.name)}</span>`
+    : `<span class="pv-tag warn">${e.status === 'ambiguous' ? esc(e.candidates.map(catName).join('/')) : '항목?'}</span>`;
+  const rest = [dayLabel(e.date, state.today), e.memo].filter(Boolean).map(esc).join(' · ');
+  return `<div class="pv ${ok ? '' : 'bad'}">${tag}<b>${won(e.amount)}</b><span class="pv-rest">${rest}</span></div>`;
 }
 
 function autoGrow(t) {
@@ -421,7 +477,7 @@ function openSavingSheet() {
       <button class="chip selected" data-sign="1">넣기</button>
       <button class="chip" data-sign="-1">빼기</button>
     </div>
-    <input class="amount-input" id="svAmount" inputmode="numeric" placeholder="금액" autocomplete="off">
+    <label class="amount-wrap"><input class="amount-input" id="svAmount" inputmode="numeric" placeholder="0" autocomplete="off"><span>원</span></label>
     <div class="amount-hint" id="svHint"></div>
     <div class="sheet-row"><input type="date" id="svDate" value="${state.today}" max="${state.today}"></div>
     <input class="memo" id="svMemo" placeholder="메모 (선택)">
@@ -505,7 +561,7 @@ function openValuationSheet() {
   const sheet = openSheet(`
     <h4>평가액 직접 입력</h4>
     <p class="muted small">시세 API를 쓸 수 없을 때, 증권 앱에서 본 총 평가액을 넣으면 그날의 점으로 그립니다.</p>
-    <input class="amount-input" id="vlAmount" inputmode="numeric" placeholder="총 평가액" autocomplete="off">
+    <label class="amount-wrap"><input class="amount-input" id="vlAmount" inputmode="numeric" placeholder="0" autocomplete="off"><span>원</span></label>
     <div class="amount-hint" id="vlHint"></div>
     <div class="sheet-row"><input type="date" id="vlDate" value="${state.today}" max="${state.today}"></div>
     <button class="save" id="vlSave">저장</button>
@@ -786,6 +842,7 @@ function bindUI() {
     if (b) openExpenseSheet(Number(b.dataset.cat));
   });
   $('#savingBar').addEventListener('click', openSavingSheet);
+  $('#savingAdd').addEventListener('click', openSavingSheet);
   $('#addHoldingBtn').addEventListener('click', () => openHoldingSheet());
   $('#addValuationBtn').addEventListener('click', openValuationSheet);
   $('#backdrop').addEventListener('click', closeSheet);

@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#14532d">
+  <meta name="theme-color" content="#f2f4f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101114" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="내 재정">
@@ -17,54 +18,85 @@
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
-  <header class="top">
-    <div class="total-label">총자산</div>
-    <div class="total" id="total">0원</div>
-    <div class="total-sub" id="totalSub">저축 0원 · 투자 0원</div>
-  </header>
-
   <main>
     <!-- 홈 -->
     <section class="view" id="view-home">
+      <header class="hero">
+        <div class="hero-date" id="todayLabel"></div>
+        <div class="hero-label">총자산</div>
+        <div class="hero-total"><span id="total">0</span><small>원</small></div>
+        <div class="mix" id="mix"><span id="mixSaving"></span><span id="mixInvest"></span></div>
+        <div class="mix-legend">
+          <span><i class="saving"></i>저축 <b id="legendSaving">0원</b></span>
+          <span><i class="invest"></i>투자 <b id="legendInvest">0원</b></span>
+        </div>
+      </header>
+
       <div class="quick">
-        <textarea id="quickInput" rows="1" placeholder="식비 12000 점심  ·  어제 커피 4500" autocomplete="off" enterkeyhint="done"></textarea>
-        <div class="quick-preview" id="quickPreview"></div>
-        <div class="quick-pick" id="quickPick" hidden></div>
+        <svg class="quick-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <textarea id="quickInput" rows="1" placeholder="식비 12000 점심 · 어제 커피 4500" autocomplete="off" enterkeyhint="done" aria-label="한 줄 입력"></textarea>
       </div>
+      <div class="quick-preview" id="quickPreview"></div>
+      <div class="quick-pick" id="quickPick" hidden></div>
 
-      <div class="section-head">
-        <h2 id="budgetTitle">예산</h2>
-        <span class="muted" id="budgetSum"></span>
-      </div>
-      <div class="bars" id="budgetBars"></div>
+      <!-- ① 예산 -->
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow"><span class="step">1</span><span id="budgetTitle">예산</span></div>
+            <div class="headline"><span id="budgetLeft">0원</span> <small class="muted" id="budgetOf"></small></div>
+          </div>
+          <span class="hint">막대를 눌러 입력</span>
+        </div>
+        <div class="bars" id="budgetBars"></div>
+      </article>
 
-      <div class="flow">
-        <div class="saving-box">
-          <div class="section-head"><h2>저축</h2></div>
-          <button class="saving-bar" id="savingBar" aria-label="저축 입력">
-            <div class="saving-over" id="savingOver"></div>
-            <div class="saving-track"><div class="saving-fill" id="savingFill"></div></div>
-          </button>
-          <div class="saving-label" id="savingLabel"></div>
+      <div class="flow-link"><span class="flow-arrow">↓</span><span id="flowToSaving"></span></div>
+
+      <!-- ② 저축 -->
+      <article class="card saving-card" id="savingCard">
+        <button class="saving-bar" id="savingBar" aria-label="저축 입력">
+          <span class="saving-over" id="savingOver"></span>
+          <span class="saving-track"><span class="saving-fill" id="savingFill"></span><span class="saving-pct" id="savingPct"></span></span>
+        </button>
+        <div class="saving-info">
+          <div class="eyebrow"><span class="step">2</span>저축</div>
+          <div class="headline" id="savingBalance">0원</div>
+          <div class="muted small" id="savingMeta"></div>
+          <button class="pill" id="savingAdd">+ 저축 입력</button>
         </div>
-        <div class="invest-box">
-          <div class="section-head">
-            <h2>투자</h2>
-            <span class="muted small" id="investGain"></span>
+      </article>
+
+      <div class="flow-link"><span class="flow-arrow">↓</span><span id="flowToInvest"></span></div>
+
+      <!-- ③ 투자 -->
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow"><span class="step">3</span>투자</div>
+            <div class="headline" id="investValue">0원</div>
+            <div class="invest-sub"><span class="gain" id="investGain"></span><span class="muted small" id="investPrincipal"></span></div>
           </div>
-          <div class="chart-wrap"><canvas id="investChart"></canvas></div>
-          <div class="invest-empty muted small" id="investEmpty">종목을 등록하면 원금·평가액 선이 그려집니다.</div>
-          <div class="invest-actions">
-            <button class="link" id="addHoldingBtn">+ 종목 등록</button>
-            <button class="link" id="addValuationBtn">평가액 직접 입력</button>
-          </div>
-          <div class="muted small" id="priceStatus"></div>
         </div>
-      </div>
+        <div class="chart-wrap"><canvas id="investChart"></canvas></div>
+        <div class="invest-empty" id="investEmpty">
+          <svg viewBox="0 0 48 24" aria-hidden="true"><polyline points="2,20 14,14 24,16 34,8 46,4" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>종목을 등록하면 원금과 평가액 선이 그려집니다</span>
+        </div>
+        <div class="chart-legend">
+          <span><i class="line"></i>평가액</span><span><i class="dash"></i>원금</span>
+        </div>
+        <div class="pill-row">
+          <button class="pill" id="addHoldingBtn">+ 종목 등록</button>
+          <button class="pill ghost" id="addValuationBtn">평가액 직접 입력</button>
+        </div>
+        <div class="muted small status" id="priceStatus"></div>
+      </article>
     </section>
 
     <!-- 내역 -->
     <section class="view" id="view-history" hidden>
+      <h1 class="page-title">내역</h1>
       <div class="month-nav">
         <button class="icon-btn" id="prevMonth" aria-label="이전 달">‹</button>
         <strong id="historyMonth"></strong>
@@ -82,6 +114,7 @@
 
     <!-- 설정 -->
     <section class="view" id="view-settings" hidden>
+      <h1 class="page-title">설정</h1>
       <h3>예산 항목</h3>
       <p class="muted small">별칭은 쉼표로 구분합니다. 한 줄 입력에서 별칭으로도 항목을 찾습니다 (예: 밥, 커피 → 식비).</p>
       <div id="categoryEditor"></div>
@@ -105,12 +138,12 @@
     </section>
   </main>
 
-  <button class="fab" id="fab" aria-label="지출 입력">+</button>
+  <button class="fab" id="fab" aria-label="지출 입력"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
 
   <nav class="tabs">
-    <button data-view="home" class="active">홈</button>
-    <button data-view="history">내역</button>
-    <button data-view="settings">설정</button>
+    <button data-view="home" class="active"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>홈</button>
+    <button data-view="history"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/></svg>내역</button>
+    <button data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>설정</button>
   </nav>
 
   <!-- 하단 시트 -->
