@@ -129,8 +129,9 @@
       <label class="field"><span>한도 금액</span><input id="savingsLimit" inputmode="numeric" placeholder="예: 5000000"></label>
 
       <h3>시세 API</h3>
-      <p class="muted small">공공데이터포털 「금융위원회_주식시세정보」 인증키. 이 기기 안에만 저장되고 백업 파일에는 들어가지 않습니다.</p>
-      <label class="field"><span>인증키</span><input id="apiKey" type="password" autocomplete="off" placeholder="serviceKey"></label>
+      <p class="muted small">키는 이 기기 안에만 저장되고 백업 파일에는 들어가지 않습니다.</p>
+      <label class="field"><span>국내 주식 — 공공데이터포털 「금융위원회_주식시세정보」 인증키</span><input id="apiKey" type="password" autocomplete="off" placeholder="serviceKey"></label>
+      <label class="field"><span>미국 주식·환율 — Alpha Vantage API 키</span><input id="avKey" type="password" autocomplete="off" placeholder="무료 키: 하루 25회"></label>
       <button class="btn ghost" id="testApi">지금 시세 받아오기</button>
 
       <h3>백업</h3>

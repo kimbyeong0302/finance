@@ -28,3 +28,37 @@ test('시세가 없으면 매수 단가, 수동 평가액은 이어서 사용', 
     ['2026-10-05', 15000, 18000],
   ]);
 });
+
+import { marketOf, costKRW } from '../js/invest.js';
+
+test('시장 자동 구분', () => {
+  assert.equal(marketOf('005930'), 'KR');
+  assert.equal(marketOf('aapl'), 'US');
+  assert.equal(marketOf('BRK.B'), 'US');
+  assert.equal(marketOf(''), 'NONE');
+  assert.equal(marketOf('12345'), null);
+  assert.equal(marketOf('삼성'), null);
+});
+
+test('미국 주식: 원금은 매수 시 환율, 평가액은 그날 환율', () => {
+  const us = { code: 'AAPL', qty: 2, price: 100, date: '2026-10-01', currency: 'USD', fx: 1300 };
+  assert.equal(costKRW(us), 260000);
+  const s = buildSeries(
+    [us],
+    [{ code: 'AAPL', date: '2026-10-01', close: 100 }, { code: 'AAPL', date: '2026-10-02', close: 110 }],
+    [],
+    '2026-10-03',
+    [{ date: '2026-10-01', rate: 1300 }, { date: '2026-10-02', rate: 1400 }],
+  );
+  assert.deepEqual(s.map((p) => [p.date, p.principal, p.value]), [
+    ['2026-10-01', 260000, 260000],
+    ['2026-10-02', 260000, 308000],
+    ['2026-10-03', 260000, 308000],
+  ]);
+});
+
+test('환율 데이터가 없으면 매수 시 환율로 평가', () => {
+  const s = buildSeries([{ code: 'MSFT', qty: 1, price: 400, date: '2026-10-01', currency: 'USD', fx: 1350 }],
+    [{ code: 'MSFT', date: '2026-10-01', close: 410 }], [], '2026-10-01');
+  assert.equal(s[0].value, 410 * 1350);
+});

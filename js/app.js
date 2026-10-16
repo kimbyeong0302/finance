@@ -6,8 +6,8 @@ import {
   runPendingSettlements, savingsBalance, updateCategoryBudget,
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
-import { catchUpPrices } from './prices.js';
-import { buildSeries, latestPoint } from './invest.js';
+import { catchUpPrices, fxOn } from './prices.js';
+import { buildSeries, costKRW, currencyOf, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -56,21 +56,31 @@ async function onOpen() {
   await maybeShowPreview();
   await maybeShowOverflow();
 
+  updatePrices();
+}
+
+// 시세 따라잡기 — 미국 종목은 호출 사이 12초 간격이라 뒤에서 천천히 돈다
+function updatePrices() {
   const status = $('#priceStatus');
-  catchUpPrices(state.today).then(async (r) => {
-    if (r.errors?.length) status.textContent = r.errors[0].message;
+  return catchUpPrices(state.today, { onProgress: (t) => { status.textContent = t; } }).then(async (r) => {
+    if (r.errors.length) status.textContent = `${r.errors[0].code}: ${r.errors[0].message}`;
     else if (r.added) status.textContent = `시세 ${r.added}건 업데이트`;
-    else status.textContent = await priceStatusText();
+    else status.textContent = await priceStatusText(r);
     renderInvest();
     renderTotal();
+    return r;
   });
 }
 
-async function priceStatusText() {
-  const last = await getSetting('lastPriceUpdate');
-  const key = await getSetting('apiKey');
-  if (!key) return (await db.holdings.count()) ? '시세 API 키가 없어 매수 단가·직접 입력 평가액으로 표시합니다.' : '';
-  return last ? `시세 확인: ${last}` : '';
+async function priceStatusText(r) {
+  const parts = [];
+  if (r.skipped.includes('noKRKey')) parts.push('국내 시세 키 없음');
+  if (r.skipped.includes('noUSKey')) parts.push('Alpha Vantage 키 없음');
+  if (parts.length) return `${parts.join(' · ')} — 매수 단가·직접 입력 평가액으로 표시합니다.`;
+  const kr = await getSetting('lastPriceUpdate_KR');
+  const us = await getSetting('lastPriceUpdate_US');
+  const done = [kr && `국내 ${dayLabel(kr, state.today)}`, us && `미국 ${dayLabel(us, state.today)}`].filter(Boolean);
+  return done.length ? `시세 확인: ${done.join(' · ')}` : '';
 }
 
 async function refresh() {
@@ -182,8 +192,8 @@ async function renderSavings() {
 // ───────────────────────── 투자 꺾은선 ─────────────────────────
 
 async function investSeries() {
-  const [holdings, prices, manual] = await Promise.all([db.holdings.toArray(), db.prices.toArray(), db.valuations.toArray()]);
-  return buildSeries(holdings, prices, manual, state.today);
+  const [holdings, prices, manual, fx] = await Promise.all([db.holdings.toArray(), db.prices.toArray(), db.valuations.toArray(), db.fxRates.toArray()]);
+  return buildSeries(holdings, prices, manual, state.today, fx);
 }
 
 function cssVar(name) {
@@ -525,51 +535,104 @@ function openSavingSheet() {
 // ───────────────────────── 투자 종목 등록 ─────────────────────────
 // transfer: 저축에서 옮길 금액 (한도 초과 팝업에서 열면 초과 금액이 채워져 있다)
 
+const MARKET_LABEL = { KR: '국내 주식 · 원화', US: '미국 주식 · 달러', NONE: '직접 평가 자산 (시세 없음)' };
+
+// 단가 입력: 원화는 정수, 달러는 소수점 둘째 자리까지
+function bindPriceInput(input, getCurrency) {
+  input.addEventListener('input', () => {
+    if (getCurrency() === 'USD') {
+      const v = input.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1');
+      const [i, d] = v.split('.');
+      input.value = (i ? Number(i).toLocaleString('ko-KR') : (d !== undefined ? '0' : '')) + (d !== undefined ? `.${d.slice(0, 2)}` : '');
+    } else {
+      const digits = input.value.replace(/[^\d]/g, '');
+      input.value = digits ? Number(digits).toLocaleString('ko-KR') : '';
+    }
+  });
+}
+
+const readNumber = (input) => Number(input.value.replace(/,/g, '')) || 0;
+
 function openHoldingSheet(transfer = 0) {
   const sheet = openSheet(`
     <h4>투자 종목 등록</h4>
     ${transfer ? `<div class="note">저축 한도 초과분 <b>${won(transfer)}</b>을 투자로 옮깁니다.</div>` : ''}
-    <label class="field"><span>종목코드 (6자리, 비우면 시세 없이 직접 평가)</span><input id="hdCode" inputmode="numeric" maxlength="6" placeholder="005930"></label>
-    <label class="field"><span>종목명</span><input id="hdName" placeholder="비우면 시세 받을 때 채워짐"></label>
+    <label class="field"><span>종목코드 — 국내 6자리 숫자 · 미국 티커 · 비우면 직접 평가</span>
+      <input id="hdCode" maxlength="10" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="005930 또는 AAPL"></label>
+    <div class="market-badge" id="hdMarket">${MARKET_LABEL.NONE}</div>
+    <label class="field"><span>종목명</span><input id="hdName" placeholder="비우면 국내 종목은 시세 받을 때 채워짐"></label>
     <div class="row">
       <label class="field" style="flex:1"><span>보유 수량</span><input id="hdQty" inputmode="decimal" placeholder="10"></label>
-      <label class="field" style="flex:1"><span>매수 단가</span><input id="hdPrice" inputmode="numeric" placeholder="70,000"></label>
+      <label class="field" style="flex:1"><span id="hdPriceLabel">매수 단가 (원)</span><input id="hdPrice" inputmode="decimal" placeholder="70,000"></label>
     </div>
-    <label class="field"><span>매수일</span><input id="hdDate" type="date" value="${state.today}" max="${state.today}"></label>
-    <label class="field"><span>저축에서 차감할 금액</span><input id="hdTransfer" inputmode="numeric" value="${transfer ? num(transfer) : ''}" placeholder="0 (저축과 무관하면 비워 두기)"></label>
+    <div class="row">
+      <label class="field" style="flex:1"><span>매수일</span><input id="hdDate" type="date" value="${state.today}" max="${state.today}"></label>
+      <label class="field" style="flex:1" id="hdFxField" hidden><span>매수 시 환율 (원/달러)</span><input id="hdFx" inputmode="decimal" placeholder="1,380.5"></label>
+    </div>
+    <label class="field"><span>저축에서 차감할 금액 (원)</span><input id="hdTransfer" inputmode="numeric" value="${transfer ? num(transfer) : ''}" placeholder="0 (저축과 무관하면 비워 두기)"></label>
     <div class="amount-hint" id="hdHint"></div>
     <button class="save" id="hdSave">등록</button>
   `);
   const q = (id) => sheet.querySelector(id);
-  bindAmountInput(q('#hdPrice'));
+  let market = 'NONE';
+  let fxTouched = false;
+  const currency = () => currencyOf(market);
+  bindPriceInput(q('#hdPrice'), currency);
+  bindPriceInput(q('#hdFx'), () => 'USD');
   bindAmountInput(q('#hdTransfer'));
   q('#hdCode').focus();
+
   const updateHint = () => {
-    const cost = (Number(q('#hdQty').value) || 0) * readAmount(q('#hdPrice'));
+    const cost = costKRW({ qty: readNumber(q('#hdQty')), price: readNumber(q('#hdPrice')), currency: currency(), fx: readNumber(q('#hdFx')) });
     q('#hdHint').textContent = cost ? `원금 ${won(cost)}` : '';
   };
-  q('#hdQty').addEventListener('input', updateHint);
-  q('#hdPrice').addEventListener('input', updateHint);
+  const prefillFx = async () => {
+    if (market !== 'US' || fxTouched) return;
+    const rate = await fxOn(q('#hdDate').value || state.today);
+    q('#hdFx').value = rate ? rate.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '';
+    updateHint();
+  };
+  q('#hdCode').addEventListener('input', () => {
+    const m = marketOf(q('#hdCode').value);
+    const badge = q('#hdMarket');
+    badge.classList.toggle('bad', m === null);
+    badge.textContent = m ? MARKET_LABEL[m] : '종목코드 형식을 확인하세요';
+    if (!m || m === market) return;
+    market = m;
+    q('#hdPriceLabel').textContent = `매수 단가 (${market === 'US' ? '달러' : '원'})`;
+    q('#hdPrice').placeholder = market === 'US' ? '189.50' : '70,000';
+    q('#hdPrice').value = '';
+    q('#hdFxField').hidden = market !== 'US';
+    prefillFx();
+    updateHint();
+  });
+  q('#hdDate').addEventListener('change', prefillFx);
+  q('#hdFx').addEventListener('input', () => { fxTouched = true; });
+  for (const id of ['#hdQty', '#hdPrice', '#hdFx']) q(id).addEventListener('input', updateHint);
 
   q('#hdSave').addEventListener('click', async () => {
-    const code = q('#hdCode').value.trim();
-    let qty = Number(q('#hdQty').value) || 0;
-    let price = readAmount(q('#hdPrice'));
+    const code = q('#hdCode').value.trim().toUpperCase();
+    const m = marketOf(code);
+    if (!m) { q('#hdCode').focus(); return; }
+    let qty = readNumber(q('#hdQty'));
+    let price = readNumber(q('#hdPrice'));
+    const fx = m === 'US' ? readNumber(q('#hdFx')) : 1;
     const move = readAmount(q('#hdTransfer'));
     // 종목코드 없이 금액만 옮기는 경우(펀드 등): 수량 1 × 옮긴 금액
-    if (!qty && !price && move) { qty = 1; price = move; }
-    if (!qty || !price) { q('#hdQty').focus(); return; }
-    if (code && !/^[0-9A-Z]{6}$/i.test(code)) { q('#hdCode').focus(); return; }
+    if (m === 'NONE' && !qty && !price && move) { qty = 1; price = move; }
+    if (!qty) { q('#hdQty').focus(); return; }
+    if (!price) { q('#hdPrice').focus(); return; }
+    if (!fx) { q('#hdFx').focus(); return; }
     const date = q('#hdDate').value || state.today;
-    const name = q('#hdName').value.trim() || (code ? '' : '직접 평가 자산');
+    const name = q('#hdName').value.trim() || (m === 'NONE' ? '직접 평가 자산' : m === 'US' ? code : '');
     await db.transaction('rw', db.holdings, db.savings, async () => {
-      await db.holdings.add({ code: code.toUpperCase(), name, qty, price, date });
-      if (move) await db.savings.add({ date, amount: -move, type: 'invest', memo: `투자 이동${name ? ` · ${name}` : code ? ` · ${code}` : ''}` });
+      await db.holdings.add({ code, name, market: m, currency: currencyOf(m), qty, price, date, fx });
+      if (move) await db.savings.add({ date, amount: -move, type: 'invest', memo: `투자 이동 · ${name || code}` });
     });
     closeSheet();
     await refresh();
     showToast(move ? `저축 ${won(move)} → 투자` : '종목 등록 완료');
-    if (code) catchUpPrices(state.today).then(() => { renderInvest(); renderTotal(); });
+    if (m !== 'NONE') updatePrices();
   });
 }
 
@@ -702,8 +765,8 @@ async function renderHistory() {
   const holdings = await db.holdings.orderBy('date').reverse().toArray();
   $('#holdingList').innerHTML = holdings.length ? holdings.map((h) => `
     <li>
-      <div class="grow"><div>${esc(h.name || h.code)}</div><div class="sub">${esc(h.code)} · ${h.qty}주 × ${num(h.price)} · ${h.date}</div></div>
-      <div class="amt">${num(h.qty * h.price)}</div>
+      <div class="grow"><div>${esc(h.name || h.code)}</div><div class="sub">${holdingDetail(h)}</div></div>
+      <div class="amt">${num(costKRW(h))}</div>
       <button class="del" data-del-holding="${h.id}" aria-label="삭제">×</button>
     </li>`).join('') : '<li class="empty">등록된 종목이 없습니다</li>';
 
@@ -714,6 +777,14 @@ async function renderHistory() {
       <div class="amt">${num(v.value)}</div>
       <button class="del" data-del-valuation="${v.date}" aria-label="삭제">×</button>
     </li>`).join('') : '<li class="empty">직접 입력한 평가액이 없습니다</li>';
+}
+
+function holdingDetail(h) {
+  const parts = [h.code ? `${esc(h.code)} ${h.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가'];
+  if (h.currency === 'USD') parts.push(`${h.qty}주 × $${h.price.toLocaleString('en-US', { maximumFractionDigits: 2 })} × ${num(h.fx)}원`);
+  else parts.push(`${h.qty}주 × ${num(h.price)}원`);
+  parts.push(h.date);
+  return parts.join(' · ');
 }
 
 async function onHistoryClick(e) {
@@ -743,6 +814,7 @@ async function renderSettings() {
   drawCategoryEditor();
   $('#savingsLimit').value = num(Number(await getSetting('savingsLimit', 0)) || 0).replace(/^0$/, '');
   $('#apiKey').value = (await getSetting('apiKey')) || '';
+  $('#avKey').value = (await getSetting('avKey')) || '';
 }
 
 function drawCategoryEditor() {
@@ -797,6 +869,7 @@ async function saveSettings() {
   await ensureMonth(ym);
   await setSetting('savingsLimit', readAmount($('#savingsLimit')));
   await setSetting('apiKey', $('#apiKey').value.trim());
+  await setSetting('avKey', $('#avKey').value.trim());
   await refresh();
   await renderSettings();
   showToast('설정을 저장했습니다');
@@ -832,13 +905,19 @@ async function importBackup(e) {
 
 async function testPrices() {
   await setSetting('apiKey', $('#apiKey').value.trim());
-  showToast('시세를 받아오는 중…');
-  const r = await catchUpPrices(state.today);
-  if (r.skipped === 'noKey') return showModal('인증키를 먼저 입력하세요.', OK);
-  if (r.skipped === 'noHoldings') return showModal('종목코드가 있는 투자 종목이 없습니다.', OK);
+  await setSetting('avKey', $('#avKey').value.trim());
+  showToast('시세를 받아오는 중… (미국 종목은 종목당 12초)');
+  const r = await updatePrices();
   await refresh();
-  if (r.errors.length) return showModal(r.errors.map((x) => `${x.code}: ${x.message}`).join('\n'), OK);
-  showModal(r.added ? `시세 ${r.added}건을 저장했습니다.` : '새로 받은 시세가 없습니다. (전 영업일 종가는 다음 영업일 오후 1시 이후 반영)', OK);
+  if (r.skipped.includes('noHoldings')) return showModal('종목코드가 있는 투자 종목이 없습니다.', OK);
+  const lines = [];
+  if (r.added) lines.push(`시세 ${r.added}건을 저장했습니다.`);
+  for (const x of r.errors) lines.push(`${x.code}: ${x.message}`);
+  if (r.skipped.includes('noKRKey')) lines.push('국내 종목: 금융위 인증키가 없습니다.');
+  if (r.skipped.includes('noUSKey')) lines.push('미국 종목: Alpha Vantage 키가 없습니다.');
+  if (r.skipped.includes('usDoneToday')) lines.push('미국 종목·환율은 오늘 이미 받았습니다 (호출 횟수 절약).');
+  if (!lines.length) lines.push('새로 받은 시세가 없습니다.\n국내 종가는 다음 영업일 오후 1시 이후 반영됩니다.');
+  showModal(`시세 업데이트\n${lines.join('\n')}`, OK);
 }
 
 // ───────────────────────── 연결 ─────────────────────────

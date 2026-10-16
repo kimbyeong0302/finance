@@ -368,6 +368,9 @@ main { padding: 0 16px; }
 .sheet .note { font-size: 14px; background: color-mix(in srgb, var(--saving-full) 10%, transparent); color: var(--text); border-radius: 14px; padding: 12px 14px; margin: 6px 0 14px; }
 .sheet .note b { color: var(--saving-full); }
 
+.market-badge { font-size: 13px; font-weight: 600; color: var(--text-2); background: var(--track); border-radius: 10px; padding: 8px 12px; margin: -4px 0 12px; }
+.market-badge.bad { color: var(--over); }
+
 /* ───────── 팝업 ───────── */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 30; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fade .2s; }
 .modal { background: var(--card); border-radius: 24px; padding: 24px 20px 18px; width: 100%; max-width: 360px; animation: pop .22s cubic-bezier(.2, .8, .2, 1); }
