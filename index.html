@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14532d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="내 재정">
+  <title>내 재정</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/dexie.min.js"></script>
+  <script src="vendor/chart.umd.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="total-label">총자산</div>
+    <div class="total" id="total">0원</div>
+    <div class="total-sub" id="totalSub">저축 0원 · 투자 0원</div>
+  </header>
+
+  <main>
+    <!-- 홈 -->
+    <section class="view" id="view-home">
+      <div class="quick">
+        <textarea id="quickInput" rows="1" placeholder="식비 12000 점심  ·  어제 커피 4500" autocomplete="off" enterkeyhint="done"></textarea>
+        <div class="quick-preview" id="quickPreview"></div>
+        <div class="quick-pick" id="quickPick" hidden></div>
+      </div>
+
+      <div class="section-head">
+        <h2 id="budgetTitle">예산</h2>
+        <span class="muted" id="budgetSum"></span>
+      </div>
+      <div class="bars" id="budgetBars"></div>
+
+      <div class="flow">
+        <div class="saving-box">
+          <div class="section-head"><h2>저축</h2></div>
+          <button class="saving-bar" id="savingBar" aria-label="저축 입력">
+            <div class="saving-over" id="savingOver"></div>
+            <div class="saving-track"><div class="saving-fill" id="savingFill"></div></div>
+          </button>
+          <div class="saving-label" id="savingLabel"></div>
+        </div>
+        <div class="invest-box">
+          <div class="section-head">
+            <h2>투자</h2>
+            <span class="muted small" id="investGain"></span>
+          </div>
+          <div class="chart-wrap"><canvas id="investChart"></canvas></div>
+          <div class="invest-empty muted small" id="investEmpty">종목을 등록하면 원금·평가액 선이 그려집니다.</div>
+          <div class="invest-actions">
+            <button class="link" id="addHoldingBtn">+ 종목 등록</button>
+            <button class="link" id="addValuationBtn">평가액 직접 입력</button>
+          </div>
+          <div class="muted small" id="priceStatus"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 내역 -->
+    <section class="view" id="view-history" hidden>
+      <div class="month-nav">
+        <button class="icon-btn" id="prevMonth" aria-label="이전 달">‹</button>
+        <strong id="historyMonth"></strong>
+        <button class="icon-btn" id="nextMonth" aria-label="다음 달">›</button>
+      </div>
+      <h3>지출</h3>
+      <ul class="list" id="expenseList"></ul>
+      <h3>저축</h3>
+      <ul class="list" id="savingList"></ul>
+      <h3>투자 종목</h3>
+      <ul class="list" id="holdingList"></ul>
+      <h3>평가액 직접 입력</h3>
+      <ul class="list" id="valuationList"></ul>
+    </section>
+
+    <!-- 설정 -->
+    <section class="view" id="view-settings" hidden>
+      <h3>예산 항목</h3>
+      <p class="muted small">별칭은 쉼표로 구분합니다. 한 줄 입력에서 별칭으로도 항목을 찾습니다 (예: 밥, 커피 → 식비).</p>
+      <div id="categoryEditor"></div>
+      <button class="btn ghost" id="addCategory">+ 항목 추가</button>
+
+      <h3>저축 한도</h3>
+      <label class="field"><span>한도 금액</span><input id="savingsLimit" inputmode="numeric" placeholder="예: 5000000"></label>
+
+      <h3>시세 API</h3>
+      <p class="muted small">공공데이터포털 「금융위원회_주식시세정보」 인증키. 이 기기 안에만 저장되고 백업 파일에는 들어가지 않습니다.</p>
+      <label class="field"><span>인증키</span><input id="apiKey" type="password" autocomplete="off" placeholder="serviceKey"></label>
+      <button class="btn ghost" id="testApi">지금 시세 받아오기</button>
+
+      <h3>백업</h3>
+      <div class="row">
+        <button class="btn ghost" id="exportBtn">JSON 내보내기</button>
+        <label class="btn ghost file-btn">JSON 가져오기<input type="file" id="importFile" accept="application/json,.json" hidden></label>
+      </div>
+      <p class="muted small">가져오기는 지금 기기의 데이터를 백업 파일 내용으로 바꿉니다.</p>
+      <button class="btn primary" id="saveSettings">설정 저장</button>
+    </section>
+  </main>
+
+  <button class="fab" id="fab" aria-label="지출 입력">+</button>
+
+  <nav class="tabs">
+    <button data-view="home" class="active">홈</button>
+    <button data-view="history">내역</button>
+    <button data-view="settings">설정</button>
+  </nav>
+
+  <!-- 하단 시트 -->
+  <div class="sheet-backdrop" id="backdrop" hidden></div>
+  <div class="sheet" id="sheet" hidden role="dialog" aria-modal="true"></div>
+
+  <!-- 팝업 -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal">
+      <p id="modalText"></p>
+      <div class="modal-actions" id="modalActions"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+</body>
+</html>
