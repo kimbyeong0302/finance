@@ -105,6 +105,8 @@ async function renderBudget() {
     ? `지금대로면 월말에 <b>${won(s.net)}</b>이 저축으로`
     : `지금대로면 <b class="neg">${won(-s.net)}</b> 부족 → 다음 달 감액`;
 
+  renderAllocation(view, totalFinal);
+
   const box = $('#budgetBars');
   if (!view.length) {
     box.innerHTML = '<div class="bars-empty">설정에서 예산 항목을 추가하세요.</div>';
@@ -128,6 +130,20 @@ async function renderBudget() {
         ${v.cut > 0 ? `<span class="bar-cut" title="지난달 초과로 ${num(v.cut)}원 감액">감액 ${shortWon(v.cut)}</span>` : ''}
       </button>`;
   }).join('');
+}
+
+// 전체 예산이 항목별로 어떻게 나뉘어 있는지 — 가로 누적 막대 (이번 달 최종 예산 기준)
+function renderAllocation(view, totalFinal) {
+  const box = $('#budgetAlloc');
+  const parts = view.filter((v) => v.final > 0);
+  box.hidden = !parts.length;
+  if (!parts.length) return;
+  $('#allocTotal').textContent = won(totalFinal);
+  const pct = (v) => (v.final / totalFinal) * 100;
+  $('#allocBar').innerHTML = parts.map((v) => `
+    <span style="flex-grow:${v.final};background:${esc(v.category.color)}" title="${esc(v.category.name)} ${won(v.final)} (${pct(v).toFixed(1)}%)"></span>`).join('');
+  $('#allocLegend').innerHTML = parts.map((v) => `
+    <span><i style="background:${esc(v.category.color)}"></i>${esc(v.category.name)} <b>${Math.round(pct(v))}%</b></span>`).join('');
 }
 
 // ───────────────────────── 저축 막대 ─────────────────────────
