@@ -81,3 +81,12 @@ test('이름이 별칭보다 우선 — 별칭 단어는 메모로 남는다', (
   assert.deepEqual([e.categoryId, e.memo], [2, '버스']);
   assert.equal(parseEntry('버스 1500', withAlias, today).categoryId, 2);
 });
+
+test('수입: "수입" 단어나 + 금액이면 항목 없이 수입으로', () => {
+  const a = parseEntry('수입 50000 보너스', cats, today);
+  assert.deepEqual([a.kind, a.amount, a.memo, a.status], ['income', 50000, '보너스', 'ok']);
+  const b = parseEntry('+3만 환급 어제', cats, today);
+  assert.deepEqual([b.kind, b.amount, b.memo, b.date], ['income', 30000, '환급', '2026-10-15']);
+  assert.equal(parseEntry('식비 12000', cats, today).kind, 'expense');
+  assert.equal(parseEntry('수입 보너스', cats, today).status, 'noAmount');
+});

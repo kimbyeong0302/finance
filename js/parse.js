@@ -89,8 +89,15 @@ export function parseEntry(text, categories, today = todayStr()) {
   const tokens = raw.split(/\s+/).filter(Boolean).flatMap(splitGlued);
   let amount = null;
   let date = today;
+  let income = false; // "수입 50000 보너스" 또는 "+50000 보너스" → 저축에 더하는 수입
   const words = [];
   for (const t of tokens) {
+    if (t === '수입' || t === '+') { income = true; continue; } // "+3만"은 "+"와 "3만"으로 나뉘어 들어온다
+    if (amount === null && t.startsWith('+') && parseAmount(t.slice(1)) !== null) {
+      income = true;
+      amount = parseAmount(t.slice(1));
+      continue;
+    }
     // 날짜를 먼저 본다: "10.14"는 금액 10원이 아니라 10월 14일
     const d = parseDateToken(t, today);
     if (d) { date = d; continue; }
@@ -99,6 +106,10 @@ export function parseEntry(text, categories, today = todayStr()) {
       if (a !== null) { amount = a; continue; }
     }
     words.push(t);
+  }
+
+  if (income) {
+    return { raw, kind: 'income', amount, date, categoryId: null, candidates: [], memo: words.join(' '), status: amount === null ? 'noAmount' : 'ok' };
   }
 
   const active = categories.filter((c) => !c.archived);
@@ -126,7 +137,7 @@ export function parseEntry(text, categories, today = todayStr()) {
   else if (categoryId === null) status = candidates.length > 1 ? 'ambiguous' : 'noCategory';
   if (status === 'noCategory') candidates = active;
 
-  return { raw, amount, date, categoryId, candidates: candidates.map((c) => c.id), memo, status };
+  return { raw, kind: 'expense', amount, date, categoryId, candidates: candidates.map((c) => c.id), memo, status };
 }
 
 // 여러 건: 쉼표나 줄바꿈으로 구분. 단 "12,000" 같은 천 단위 쉼표는 금액으로 둔다.

@@ -175,6 +175,11 @@ async function renderAllocation() {
 
 async function renderSavings() {
   const balance = await savingsBalance();
+  const ym = ymOf(state.today);
+  const incomes = (await db.savings.where('type').equals('income').toArray()).filter((x) => ymOf(x.date) === ym);
+  const inc = $('#savingIncome');
+  inc.hidden = !incomes.length;
+  inc.innerHTML = `이번 달 수입 <b>+${won(incomes.reduce((s, x) => s + x.amount, 0))}</b> <span class="muted">· ${incomes.length}건</span>`;
   const { allocated, total, expected } = await budgetPlan();
   const ex = $('#savingExpected');
   ex.hidden = expected == null;
@@ -476,7 +481,7 @@ function chipsHTML(selectedId) {
 function openExpenseSheet(categoryId = null) {
   let selected = categoryId;
   const sheet = openSheet(`
-    <h4>지출</h4>
+    <div class="seg" role="tablist"><button class="on" role="tab" aria-selected="true">지출</button><button role="tab" id="exToIncome">수입</button></div>
     <label class="amount-wrap"><input class="amount-input" id="exAmount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off" enterkeyhint="done"><span>원</span></label>
     <div class="amount-hint" id="exHint"></div>
     <div class="chips" id="exFreq"></div>
@@ -490,6 +495,7 @@ function openExpenseSheet(categoryId = null) {
   `);
   const amount = sheet.querySelector('#exAmount');
   amount.focus(); // 탭 이벤트 안에서 바로 포커스해야 모바일에서 키패드가 뜬다
+  sheet.querySelector('#exToIncome').addEventListener('click', () => openIncomeSheet({ amount: readAmount(amount) }));
   bindAmountInput(amount, sheet.querySelector('#exHint'));
 
   const showFreq = async () => {
@@ -544,6 +550,68 @@ function openExpenseSheet(categoryId = null) {
   }
 }
 
+// ───────────────────────── 수입 입력·수정 ─────────────────────────
+// 추가 수입은 저축에 더한다 (저축 기록 type: 'income')
+
+const INCOME_PRESETS = ['보너스', '부수입', '이자', '환급', '용돈'];
+
+function openIncomeSheet({ existing = null, amount: presetAmount = 0 } = {}) {
+  const sheet = openSheet(`
+    ${existing ? '<h4>수입 수정</h4>' : '<div class="seg" role="tablist"><button role="tab" id="inToExpense">지출</button><button class="on" role="tab" aria-selected="true">수입</button></div>'}
+    <label class="amount-wrap income"><span class="sign">+</span><input class="amount-input" id="inAmount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off" enterkeyhint="done"
+      value="${existing ? num(existing.amount) : presetAmount ? num(presetAmount) : ''}"><span>원</span></label>
+    <div class="amount-hint" id="inHint">저축에 더해집니다</div>
+    <div class="chips" id="inPresets">${INCOME_PRESETS.map((t) => `<button class="chip amount" data-memo="${t}">${t}</button>`).join('')}</div>
+    <input class="memo" id="inMemo" placeholder="내용 (예: 보너스, 중고 판매)" value="${esc(existing?.memo || '')}">
+    <div class="sheet-row"><input type="date" id="inDate" value="${existing?.date || state.today}" max="${state.today}"></div>
+    <button class="save" id="inSave">${existing ? '수정 저장' : '저장'}</button>
+    ${existing ? '<button class="danger-link" id="inDelete">이 수입 삭제</button>' : ''}
+  `);
+  const q = (id) => sheet.querySelector(id);
+  const amount = q('#inAmount');
+  amount.focus();
+  bindAmountInput(amount);
+  amount.addEventListener('input', () => {
+    const v = readAmount(amount);
+    q('#inHint').textContent = v ? `${koreanAmount(v)} · 저축에 더해집니다` : '저축에 더해집니다';
+  });
+  q('#inToExpense')?.addEventListener('click', () => openExpenseSheet());
+  q('#inPresets').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-memo]');
+    if (!b) return;
+    q('#inMemo').value = b.dataset.memo;
+    if (readAmount(amount)) save(); else amount.focus();
+  });
+  const save = async () => {
+    const value = readAmount(amount);
+    if (!value) { amount.focus(); return; }
+    const row = { date: q('#inDate').value || state.today, amount: value, type: 'income', memo: q('#inMemo').value.trim() };
+    if (existing) {
+      await db.savings.put({ ...row, id: existing.id });
+      closeSheet();
+      await refresh();
+      showToast(`수입 수정 · +${won(value)}`, async () => { await db.savings.put(existing); await refresh(); });
+    } else {
+      const id = await db.savings.add(row);
+      closeSheet();
+      await refresh();
+      showToast(`수입 +${won(value)} → 저축`, async () => { await db.savings.delete(id); await refresh(); });
+    }
+    await maybeShowOverflow();
+  };
+  amount.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  q('#inMemo').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  q('#inSave').addEventListener('click', save);
+  q('#inDelete')?.addEventListener('click', async () => {
+    const ok = await showModal(`이 수입을 삭제할까요?\n${existing.date} · +${won(existing.amount)}${existing.memo ? ` · ${existing.memo}` : ''}`, [{ key: 'no', label: '취소' }, { key: 'yes', label: '삭제', primary: true }]);
+    if (ok !== 'yes') return;
+    await db.savings.delete(existing.id);
+    closeSheet();
+    await refresh();
+    showToast('수입 삭제', async () => { await db.savings.put(existing); await refresh(); });
+  });
+}
+
 // ───────────────────────── 한 줄 입력 ─────────────────────────
 
 function catName(id) {
@@ -551,6 +619,10 @@ function catName(id) {
 }
 
 function describe(e) {
+  if (e.kind === 'income' && e.status === 'ok') {
+    const rest = [dayLabel(e.date, state.today), e.memo].filter(Boolean).map(esc).join(' · ');
+    return `<div class="pv"><span class="pv-tag" style="--chip:var(--saving)">수입</span><b>+${won(e.amount)}</b><span class="pv-rest">${rest} → 저축</span></div>`;
+  }
   if (e.status === 'noAmount') return `<div class="pv bad"><span class="pv-tag">?</span>금액을 찾지 못했어요 · “${esc(e.raw)}”</div>`;
   const ok = e.status === 'ok';
   const cat = ok ? state.categories.find((c) => c.id === e.categoryId) : null;
@@ -581,7 +653,7 @@ async function submitQuick() {
 
   // 항목을 못 찾았거나 겹치면 저장하지 않고 항목 버튼을 띄운다 — 한 건씩 차례로
   for (const e of entries) {
-    if (e.status === 'ok') continue;
+    if (e.status === 'ok' || e.kind === 'income') continue;
     const picked = await pickCategory(e);
     if (picked == null) return; // 입력을 고치면 취소
     e.categoryId = picked;
@@ -589,19 +661,33 @@ async function submitQuick() {
     $('#quickPreview').innerHTML = entries.map(describe).join('');
   }
 
-  const ids = await db.expenses.bulkAdd(
-    entries.map((e) => ({ date: e.date, ym: ymOf(e.date), categoryId: e.categoryId, amount: e.amount, memo: e.memo })),
+  const spend = entries.filter((e) => e.kind !== 'income');
+  const incomes = entries.filter((e) => e.kind === 'income');
+  const ids = spend.length ? await db.expenses.bulkAdd(
+    spend.map((e) => ({ date: e.date, ym: ymOf(e.date), categoryId: e.categoryId, amount: e.amount, memo: e.memo })),
     { allKeys: true },
-  );
-  for (const ym of new Set(entries.map((e) => ymOf(e.date)))) await ensureMonth(ym);
+  ) : [];
+  const incomeIds = incomes.length ? await db.savings.bulkAdd(
+    incomes.map((e) => ({ date: e.date, amount: e.amount, type: 'income', memo: e.memo })),
+    { allKeys: true },
+  ) : [];
+  for (const ym of new Set(spend.map((e) => ymOf(e.date)))) await ensureMonth(ym);
   t.value = '';
   autoGrow(t);
   $('#quickPreview').innerHTML = '';
   t.blur();
   await refresh();
-  const total = entries.reduce((s, e) => s + e.amount, 0);
-  const msg = entries.length === 1 ? `${catName(entries[0].categoryId)} ${won(total)} 저장` : `${entries.length}건 ${won(total)} 저장`;
-  showToast(msg, async () => { await db.expenses.bulkDelete(ids); await refresh(); });
+  const total = spend.reduce((s, e) => s + e.amount, 0);
+  const incomeTotal = incomes.reduce((s, e) => s + e.amount, 0);
+  const parts = [];
+  if (spend.length) parts.push(spend.length === 1 ? `${catName(spend[0].categoryId)} ${won(total)}` : `지출 ${spend.length}건 ${won(total)}`);
+  if (incomes.length) parts.push(`수입 +${won(incomeTotal)}`);
+  showToast(`${parts.join(' · ')} 저장`, async () => {
+    await db.expenses.bulkDelete(ids);
+    await db.savings.bulkDelete(incomeIds);
+    await refresh();
+  });
+  if (incomes.length) await maybeShowOverflow();
 }
 
 function pickCategory(entry) {
@@ -1100,11 +1186,23 @@ async function renderHistory() {
       </li>`).join('')
     : '<li class="empty">지출 내역이 없습니다</li>';
 
-  const TYPE = { settle: '정산', manual: '직접 입력', invest: '투자 이동', sell: '매도 대금' };
+  const TYPE = { settle: '정산', manual: '직접 입력', invest: '투자 이동', sell: '매도 대금', income: '수입' };
   const savings = (await db.savings.orderBy('date').reverse().toArray());
+  const monthIncomes = savings.filter((x) => x.type === 'income' && ymOf(x.date) === ym);
+  const incomeTotal = monthIncomes.reduce((t, x) => t + x.amount, 0);
+  $('#incomeList').innerHTML = monthIncomes.length
+    ? `<li><div class="grow muted small">합계</div><div class="amt income-amt">+${num(incomeTotal)}</div></li>` + monthIncomes.map((x) => `
+      <li>
+        <span class="dot" style="background:var(--saving)"></span>
+        <div class="grow" data-edit-income="${x.id}" role="button"><div>${esc(x.memo || '수입')} <span class="edit-hint">편집 ›</span></div><div class="sub">${dayLabel(x.date, state.today)} · 저축에 반영</div></div>
+        <div class="amt income-amt">+${num(x.amount)}</div>
+        <button class="del" data-del-saving="${x.id}" aria-label="삭제">×</button>
+      </li>`).join('')
+    : '<li class="empty">이번 달 수입이 없습니다</li>';
+
   $('#savingList').innerHTML = savings.length ? savings.map((s) => `
     <li>
-      <div class="grow"><div>${TYPE[s.type] || s.type}</div><div class="sub">${s.date}${s.memo ? ` · ${esc(s.memo)}` : ''}</div></div>
+      <div class="grow"${s.type === 'income' ? ` data-edit-income="${s.id}" role="button"` : ''}><div>${TYPE[s.type] || s.type}${s.type === 'income' ? ' <span class="edit-hint">편집 ›</span>' : ''}</div><div class="sub">${s.date}${s.memo ? ` · ${esc(s.memo)}` : ''}</div></div>
       <div class="amt" style="color:${s.amount < 0 ? 'var(--red)' : 'inherit'}">${s.amount < 0 ? '−' : '+'}${num(Math.abs(s.amount))}</div>
       <button class="del" data-del-saving="${s.id}" aria-label="삭제">×</button>
     </li>`).join('') : '<li class="empty">저축 내역이 없습니다</li>';
@@ -1143,6 +1241,12 @@ function holdingDetail(h) {
 }
 
 async function onHistoryClick(e) {
+  const editIncome = e.target.closest('[data-edit-income]');
+  if (editIncome) {
+    const x = await db.savings.get(Number(editIncome.dataset.editIncome));
+    if (x) openIncomeSheet({ existing: x });
+    return;
+  }
   const edit = e.target.closest('[data-edit-holding]');
   if (edit) {
     const h = await db.holdings.get(Number(edit.dataset.editHolding));
