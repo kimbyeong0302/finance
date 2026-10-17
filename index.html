@@ -97,12 +97,19 @@
           <span><i class="line"></i>평가액</span><span><i class="dash"></i>원금</span>
         </div>
         <div id="stockSection" hidden>
-          <div class="sub-head">종목별 평가액</div>
-          <div class="chart-wrap stock-chart"><canvas id="stockChart"></canvas></div>
+          <div class="alloc" id="assetMix" hidden>
+            <div class="alloc-head"><span>자산 구성</span></div>
+            <div class="alloc-bar" id="assetMixBar"></div>
+            <div class="alloc-legend" id="assetMixLegend"></div>
+          </div>
+          <div id="stockChartBox">
+            <div class="sub-head">종목별 평가액 <small class="muted">주식</small></div>
+            <div class="chart-wrap stock-chart"><canvas id="stockChart"></canvas></div>
+          </div>
           <div class="stock-table" id="stockTable"></div>
         </div>
         <div class="pill-row">
-          <button class="pill" id="addHoldingBtn">+ 종목 등록</button>
+          <button class="pill" id="addHoldingBtn">+ 자산 추가</button>
           <button class="pill ghost" id="addValuationBtn">평가액 직접 입력</button>
         </div>
         <div class="muted small status" id="priceStatus"></div>
@@ -123,7 +130,7 @@
       <ul class="list" id="incomeList"></ul>
       <h3>저축</h3>
       <ul class="list" id="savingList"></ul>
-      <h3>투자 종목</h3>
+      <h3>투자 자산</h3>
       <ul class="list" id="holdingList"></ul>
       <h3>매도 기록</h3>
       <ul class="list" id="saleList"></ul>

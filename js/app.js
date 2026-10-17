@@ -7,7 +7,7 @@ import {
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
 import { catchUpPrices, fxOn } from './prices.js';
-import { computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
+import { ASSET_TYPES, assetTypeOf, computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -267,7 +267,7 @@ async function renderInvest() {
   $('#investPrincipal').textContent = series.length ? `원금 ${won(last.principal)}` : '';
   const r = $('#investRealized');
   r.hidden = !pf.sales.length;
-  r.innerHTML = `실현손익 <b class="gain ${pf.realized > 0 ? 'up' : pf.realized < 0 ? 'down' : ''}">${signedWon(pf.realized)}</b> · 매도 ${pf.sales.length}건`;
+  r.innerHTML = `실현손익 <b class="gain ${pf.realized > 0 ? 'up' : pf.realized < 0 ? 'down' : ''}">${signedWon(pf.realized)}</b> · 매도·인출 ${pf.sales.length}건`;
   const g = $('#investGain');
   g.textContent = series.length ? gainText(gain, last.principal) : '';
   g.className = `gain ${gain > 0 ? 'up' : gain < 0 ? 'down' : ''}`;
@@ -341,37 +341,74 @@ function rateText(rate) {
   return `${sign}${Math.abs(rate).toFixed(1)}%`;
 }
 
+const TYPE_COLORS = { stock: 'var(--invest)', cash: '#00a6b4', liquid: '#3182f6', realestate: '#c2410c', other: '#7c3aed' };
+
+function pctLabel(ratio) {
+  const v = ratio * 100;
+  return v > 0 && v < 1 ? '<1%' : `${Math.round(v)}%`;
+}
+
+function stockRowHTML(st, color) {
+  const dir = st.gain > 0 ? 'up' : st.gain < 0 ? 'down' : '';
+  const rdir = st.realized > 0 ? 'up' : st.realized < 0 ? 'down' : '';
+  const isStock = st.assetType === 'stock';
+  if (!st.qty) {
+    return `
+    <div class="stock-row sold" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 기록 보기">
+      <i class="stock-dot" style="background:${color}"></i>
+      <div class="stock-name"><b>${esc(st.name)}<em class="edit-hint">기록 ›</em></b><span>${isStock && st.code ? esc(st.code) : ASSET_TYPES[st.assetType]} · ${isStock ? '전량 매도' : '전액 인출'}</span></div>
+      <div class="stock-value"><span class="muted small">실현손익</span><b class="gain ${rdir}">${signedWon(st.realized)}</b></div>
+    </div>`;
+  }
+  const sub = isStock
+    ? [st.code ? `${esc(st.code)} ${st.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가', `${Number(st.qty.toFixed(4))}주`].join(' · ')
+    : ASSET_TYPES[st.assetType];
+  const details = isStock ? `
+        <span>매수가 <b>${priceText(st.avgPrice, st.currency)}</b></span>
+        <span>현재가 <b>${priceText(st.lastClose, st.currency)}</b>${st.lastDate ? ` <small>${dayLabel(st.lastDate, state.today)}</small>` : ''}</span>` : `
+        <span>넣은 금액 <b>${won(st.principal)}</b></span>
+        ${st.lastDate ? `<span>가치 갱신 <small>${dayLabel(st.lastDate, state.today)}</small></span>` : ''}`;
+  return `
+    <div class="stock-row" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 수정">
+      <i class="stock-dot" style="background:${color}"></i>
+      <div class="stock-name"><b>${esc(st.name)}<em class="edit-hint">편집 ›</em></b><span>${sub}</span></div>
+      <div class="stock-value"><b>${num(st.value)}원</b>${isStock || st.gain ? `<span class="gain ${dir}">${rateText(st.rate)}</span>` : ''}</div>
+      <div class="stock-prices">${details}
+        ${isStock || st.gain ? `<span class="gain ${dir}">${signedWon(st.gain)}</span>` : ''}
+        ${st.realized ? `<span class="realized">실현 <b class="gain ${rdir}">${signedWon(st.realized)}</b></span>` : ''}
+      </div>
+    </div>`;
+}
+
 async function renderStocks() {
-  const { dates, stocks } = await loadPortfolio();
-  $('#stockSection').hidden = !stocks.length;
-  if (!stocks.length) return;
+  const pf = await loadPortfolio();
+  const { dates, byType } = pf;
+  const all = pf.stocks;
+  $('#stockSection').hidden = !all.length;
+  if (!all.length) return;
+  const stocks = all.filter((st) => st.assetType === 'stock');
   const color = (i) => STOCK_COLORS[i % STOCK_COLORS.length];
 
-  $('#stockTable').innerHTML = stocks.map((st, i) => {
-    const dir = st.gain > 0 ? 'up' : st.gain < 0 ? 'down' : '';
-    const rdir = st.realized > 0 ? 'up' : st.realized < 0 ? 'down' : '';
-    if (!st.qty) {
-      return `
-      <div class="stock-row sold" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 기록 보기">
-        <i class="stock-dot" style="background:${color(i)}"></i>
-        <div class="stock-name"><b>${esc(st.name)}<em class="edit-hint">기록 ›</em></b><span>${st.code ? esc(st.code) : '직접 평가'} · 전량 매도</span></div>
-        <div class="stock-value"><span class="muted small">실현손익</span><b class="gain ${rdir}">${signedWon(st.realized)}</b></div>
-      </div>`;
-    }
-    const sub = [st.code ? `${esc(st.code)} ${st.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가', `${Number(st.qty.toFixed(4))}주`].join(' · ');
-    return `
-      <div class="stock-row" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 수정">
-        <i class="stock-dot" style="background:${color(i)}"></i>
-        <div class="stock-name"><b>${esc(st.name)}<em class="edit-hint">편집 ›</em></b><span>${sub}</span></div>
-        <div class="stock-value"><b>${num(st.value)}원</b><span class="gain ${dir}">${rateText(st.rate)}</span></div>
-        <div class="stock-prices">
-          <span>매수가 <b>${priceText(st.avgPrice, st.currency)}</b></span>
-          <span>현재가 <b>${priceText(st.lastClose, st.currency)}</b>${st.lastDate ? ` <small>${dayLabel(st.lastDate, state.today)}</small>` : ''}</span>
-          <span class="gain ${dir}">${st.gain > 0 ? '+' : st.gain < 0 ? '−' : ''}${num(Math.abs(st.gain))}원</span>
-          ${st.realized ? `<span class="realized">실현 <b class="gain ${rdir}">${signedWon(st.realized)}</b></span>` : ''}
-        </div>
-      </div>`;
+  // 자산 구성 막대
+  const totalValue = Object.values(byType).reduce((a, v) => a + Math.max(0, v), 0);
+  const mix = Object.keys(ASSET_TYPES).filter((t) => byType[t] > 0);
+  $('#assetMix').hidden = mix.length < 1 || !totalValue;
+  $('#assetMixBar').innerHTML = mix.map((t) => `<span style="flex-grow:${byType[t]};background:${TYPE_COLORS[t]}" title="${ASSET_TYPES[t]} ${won(byType[t])}"></span>`).join('');
+  $('#assetMixLegend').innerHTML = mix.map((t) => `<span><i style="background:${TYPE_COLORS[t]}"></i>${ASSET_TYPES[t]} <b>${pctLabel(byType[t] / totalValue)}</b> <small>${shortWon(byType[t])}</small></span>`).join('');
+
+  // 종류별로 묶은 표
+  const sections = Object.keys(ASSET_TYPES).map((t) => {
+    const items = all.filter((st) => st.assetType === t);
+    if (!items.length) return '';
+    const sum = items.reduce((a, st) => a + st.value, 0);
+    const rows = items.map((st) => stockRowHTML(st, t === 'stock' ? color(stocks.indexOf(st)) : TYPE_COLORS[t])).join('');
+    return `<div class="asset-group"><div class="asset-group-head"><span>${ASSET_TYPES[t]}</span><b>${won(sum)}</b></div>${rows}</div>`;
   }).join('');
+  $('#stockTable').innerHTML = sections;
+
+  // 종목별 꺾은선은 주식만 (부동산 같은 큰 금액이 주식 선을 눌러 버리지 않게)
+  $('#stockChartBox').hidden = !stocks.length;
+  if (!stocks.length) return;
 
   const data = {
     labels: dates.map((d) => dayLabel(d, '0000-00-00')),
@@ -760,6 +797,7 @@ function openSavingSheet() {
 async function openStockEditor(key) {
   const pf = await loadPortfolio();
   const st = pf.stocks.find((x) => x.key === key);
+  if (st && st.assetType !== 'stock') { openAssetEditor(key); return; }
   const lots = pf.holdings.filter((h) => holdingKey(h) === key).sort((a, b) => a.date.localeCompare(b.date));
   if (!st || !lots.length) return;
   const sales = pf.sales.filter((x) => x.key === key);
@@ -806,6 +844,246 @@ function saleDetail(x) {
     ? `$${x.price.toLocaleString('en-US', { maximumFractionDigits: 2 })} × ${num(x.fx)}원`
     : `${num(x.price)}원`;
   return `${Number(x.qty.toFixed(4))}주 × ${p} = ${won(x.proceeds)} · ${x.toSavings ? '저축으로' : '저축 안 함'}`;
+}
+
+// ───────────────────────── 주식 외 자산 (현금·유동자산·부동산·기타) ─────────────────────────
+// 1원 = 1단위로 넣고 빼며, '가치 갱신'은 그날의 단위 가격(평가액 ÷ 남은 단위)을 시세처럼 저장한다.
+
+const ASSET_HINTS = {
+  cash: { name: '예: 파킹통장, 증권사 예수금, 비상금', amount: '보유 금액', in: '입금', out: '출금' },
+  liquid: { name: '예: 정기예금, 적금, CMA, MMF', amount: '넣은 금액', in: '추가 납입', out: '인출' },
+  realestate: { name: '예: 아파트, 전세보증금', amount: '취득가 (또는 지금 가치)', in: '추가 투입', out: '매각·회수' },
+  other: { name: '예: 금, 코인, 펀드', amount: '매입 금액', in: '추가 매입', out: '매도·인출' },
+};
+
+function assetSegHTML(active) {
+  return `<div class="seg asset-seg" role="tablist">${Object.entries(ASSET_TYPES).map(([t, label]) =>
+    `<button role="tab" data-asset-type="${t}" class="${t === active ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+}
+
+function bindAssetSeg(sheet, transfer) {
+  sheet.querySelector('.asset-seg')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-asset-type]');
+    if (!b || b.classList.contains('on')) return;
+    if (b.dataset.assetType === 'stock') openHoldingSheet(transfer);
+    else openAssetSheet(transfer, b.dataset.assetType);
+  });
+}
+
+const newAssetCode = () => `@${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+// 그 날짜의 단위 가격 (가치 갱신 기록이 없으면 1)
+async function unitOn(code, date) {
+  const row = await db.prices.where('[code+date]').between([code, ''], [code, date], true, true).last();
+  return row ? row.close : 1;
+}
+
+function openAssetSheet(transfer = 0, type = 'cash') {
+  const hint = ASSET_HINTS[type];
+  const sheet = openSheet(`
+    ${assetSegHTML(type)}
+    ${transfer ? `<div class="note">저축 한도 초과분 <b>${won(transfer)}</b>을 투자로 옮깁니다.</div>` : ''}
+    <label class="field"><span>이름</span><input id="asName" placeholder="${hint.name}" autocomplete="off"></label>
+    <label class="field"><span>${hint.amount} (원)</span><input id="asAmount" inputmode="numeric" value="${transfer ? num(transfer) : ''}" placeholder="0"></label>
+    <div class="amount-hint" id="asHint"></div>
+    <label class="field"><span>날짜</span><input id="asDate" type="date" value="${state.today}" max="${state.today}"></label>
+    <label class="check"><input type="checkbox" id="asFromSavings" ${transfer ? 'checked' : ''}><span>저축에서 옮긴 돈<small>켜면 이 금액만큼 저축에서 빠집니다</small></span></label>
+    <button class="save" id="asSave">추가</button>
+  `);
+  bindAssetSeg(sheet, transfer);
+  const q = (id) => sheet.querySelector(id);
+  bindAmountInput(q('#asAmount'), q('#asHint'));
+  q('#asName').focus();
+  q('#asSave').addEventListener('click', async () => {
+    const name = q('#asName').value.trim() || ASSET_TYPES[type];
+    const amount = readAmount(q('#asAmount'));
+    if (!amount) { q('#asAmount').focus(); return; }
+    const date = q('#asDate').value || state.today;
+    const fromSavings = q('#asFromSavings').checked;
+    await db.transaction('rw', db.holdings, db.savings, async () => {
+      await db.holdings.add({ code: newAssetCode(), name, assetType: type, market: 'NONE', currency: 'KRW', qty: amount, price: 1, date, fx: 1 });
+      if (fromSavings) await db.savings.add({ date, amount: -amount, type: 'invest', memo: `투자 이동 · ${name}` });
+    });
+    closeSheet();
+    await refresh();
+    showToast(`${ASSET_TYPES[type]} ${name} ${won(amount)} 추가`);
+  });
+}
+
+async function openAssetEditor(key) {
+  let pf = await loadPortfolio();
+  let st = pf.stocks.find((x) => x.key === key);
+  if (!st) return;
+  // 예전 '직접 평가 자산'(코드 없음)은 가치 갱신을 저장할 코드를 붙여 준다
+  if (!st.code) {
+    const code = newAssetCode();
+    await db.holdings.where('id').anyOf(pf.holdings.filter((h) => holdingKey(h) === key).map((h) => h.id)).modify({ code, assetType: assetTypeOf(pf.holdings.find((h) => holdingKey(h) === key)) });
+    await db.sales.where('key').equals(key).modify({ key: code, code });
+    pf = await loadPortfolio();
+    st = pf.stocks.find((x) => x.key === code);
+    key = code;
+  }
+  const hint = ASSET_HINTS[st.assetType] || ASSET_HINTS.other;
+  const lots = pf.holdings.filter((h) => holdingKey(h) === key);
+  const sales = pf.sales.filter((x) => x.key === key);
+  const revals = await db.prices.where('code').equals(st.code).toArray();
+  const records = [
+    ...lots.map((h) => ({ date: h.date, html: `<div class="grow"><div>${hint.in}</div><div class="sub">${h.date}</div></div><div class="amt">+${num(h.qty * h.price)}</div><button class="del" data-del-lot="${h.id}" aria-label="삭제">×</button>` })),
+    ...sales.map((x) => ({ date: x.date, html: `<div class="grow"><div>${hint.out}</div><div class="sub">${x.date} · ${x.toSavings ? '저축으로' : '저축 안 함'}</div></div><div class="amt">−${num(x.proceeds)}</div><button class="del" data-del-sale="${x.id}" aria-label="삭제">×</button>` })),
+    ...revals.map((r) => ({ date: r.date, html: `<div class="grow"><div>가치 갱신</div><div class="sub">${r.date}</div></div><div class="amt">${r.value ? won(r.value) : ''}</div><button class="del" data-del-reval="${r.date}" aria-label="삭제">×</button>` })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+  const dir = st.gain > 0 ? 'up' : st.gain < 0 ? 'down' : '';
+  const sheet = openSheet(`
+    <div class="asset-title"><input id="aeName" value="${esc(st.name)}" aria-label="이름"><span class="type-badge" style="--chip:${TYPE_COLORS[st.assetType]}">${ASSET_TYPES[st.assetType]}</span></div>
+    <div class="stock-summary">
+      <div><span>지금 가치</span><b>${won(st.value)}</b></div>
+      <div><span>넣은 금액</span><b>${won(st.principal)}</b></div>
+      ${st.gain ? `<div><span>평가손익</span><b class="gain ${dir}">${signedWon(st.gain)} (${rateText(st.rate)})</b></div>` : ''}
+      ${sales.length ? `<div><span>실현손익</span><b class="gain ${st.realized > 0 ? 'up' : st.realized < 0 ? 'down' : ''}">${signedWon(st.realized)}</b></div>` : ''}
+    </div>
+    <div class="row sheet-actions">
+      <button class="save ghost" id="aeIn">${hint.in}</button>
+      <button class="save ghost" id="aeOut" ${st.qty ? '' : 'disabled'}>${hint.out}</button>
+      ${st.assetType !== 'cash' ? `<button class="save ghost" id="aeReval" ${st.qty ? '' : 'disabled'}>가치 갱신</button>` : ''}
+    </div>
+    <h5 class="sheet-sub">기록</h5>
+    <ul class="list lot-list">${records.map((r) => `<li>${r.html}</li>`).join('')}</ul>
+    <button class="danger-link" id="aeDelete">이 자산 전체 삭제</button>
+  `);
+  const q = (id) => sheet.querySelector(id);
+  const code = st.code;
+  q('#aeName').addEventListener('change', async () => {
+    const name = q('#aeName').value.trim();
+    if (!name) return;
+    await db.holdings.where('code').equals(code).modify({ name });
+    await refresh();
+    showToast('이름을 바꿨습니다');
+  });
+  q('#aeIn').addEventListener('click', () => openAssetFlow(st, 'in'));
+  q('#aeOut').addEventListener('click', () => openAssetFlow(st, 'out'));
+  q('#aeReval')?.addEventListener('click', () => openAssetFlow(st, 'reval'));
+  sheet.querySelector('.lot-list').addEventListener('click', async (e) => {
+    const lot = e.target.closest('[data-del-lot]');
+    const sale = e.target.closest('[data-del-sale]');
+    const reval = e.target.closest('[data-del-reval]');
+    if (sale) { closeSheet(); await deleteSale(Number(sale.dataset.delSale)); return; }
+    if (lot) {
+      const row = await db.holdings.get(Number(lot.dataset.delLot));
+      await db.holdings.delete(row.id);
+      closeSheet();
+      await refresh();
+      showToast(`${hint.in} 기록 삭제`, async () => { await db.holdings.put(row); await refresh(); });
+    }
+    if (reval) {
+      const row = await db.prices.get([code, reval.dataset.delReval]);
+      await db.prices.delete([code, reval.dataset.delReval]);
+      closeSheet();
+      await refresh();
+      showToast('가치 갱신 기록 삭제', async () => { await db.prices.put(row); await refresh(); });
+    }
+  });
+  q('#aeDelete').addEventListener('click', async () => {
+    const ok = await showModal(`${st.name}을(를) 기록까지 모두 삭제할까요?\n저축과 주고받은 기록은 내역 탭 → 저축에 남습니다.`, [{ key: 'no', label: '취소' }, { key: 'yes', label: '삭제', primary: true }]);
+    if (ok !== 'yes') return;
+    const backup = {
+      holdings: await db.holdings.where('code').equals(code).toArray(),
+      sales: await db.sales.where('key').equals(code).toArray(),
+      prices: await db.prices.where('code').equals(code).toArray(),
+    };
+    await db.transaction('rw', db.holdings, db.sales, db.prices, async () => {
+      await db.holdings.where('code').equals(code).delete();
+      await db.sales.where('key').equals(code).delete();
+      await db.prices.where('code').equals(code).delete();
+    });
+    closeSheet();
+    await refresh();
+    showToast(`${st.name} 삭제`, async () => {
+      await db.transaction('rw', db.holdings, db.sales, db.prices, async () => {
+        await db.holdings.bulkPut(backup.holdings);
+        await db.sales.bulkPut(backup.sales);
+        await db.prices.bulkPut(backup.prices);
+      });
+      await refresh();
+    });
+  });
+}
+
+// 입금(in) · 출금(out) · 가치 갱신(reval)
+function openAssetFlow(st, mode) {
+  const hint = ASSET_HINTS[st.assetType] || ASSET_HINTS.other;
+  const title = { in: hint.in, out: hint.out, reval: '가치 갱신' }[mode];
+  const sheet = openSheet(`
+    <h4>${esc(st.name)} ${title}</h4>
+    ${mode === 'reval' ? `<p class="muted small">이자·시세 변동을 반영한 지금 가치(전체 금액)를 넣으세요. 지금 기록상 가치는 ${won(st.value)}입니다.</p>` : ''}
+    ${mode === 'out' ? `<div class="note">지금 가치 <b>${won(st.value)}</b></div>` : ''}
+    <label class="amount-wrap"><input class="amount-input" id="afAmount" inputmode="numeric" placeholder="0" autocomplete="off" value="${mode === 'reval' ? num(st.value) : ''}"><span>원</span></label>
+    <div class="amount-hint" id="afHint"></div>
+    ${mode === 'out' ? '<button class="pill" id="afAll" type="button">전액</button>' : ''}
+    <div class="sheet-row"><input type="date" id="afDate" value="${state.today}" max="${state.today}"></div>
+    ${mode === 'in' ? '<label class="check"><input type="checkbox" id="afSavings"><span>저축에서 옮긴 돈<small>켜면 이 금액만큼 저축에서 빠집니다</small></span></label>' : ''}
+    ${mode === 'out' ? '<label class="check"><input type="checkbox" id="afSavings" checked><span>저축으로 옮기기<small>끄면 총자산에서 빠져나간 돈(지출·출금)으로 기록됩니다</small></span></label>' : ''}
+    <button class="save" id="afSave">저장</button>
+  `);
+  const q = (id) => sheet.querySelector(id);
+  const amount = q('#afAmount');
+  amount.focus();
+  amount.select();
+  bindAmountInput(amount, q('#afHint'));
+  q('#afAll')?.addEventListener('click', () => { amount.value = num(st.value); amount.dispatchEvent(new Event('input')); });
+  const save = async () => {
+    const value = readAmount(amount);
+    if (!value) { amount.focus(); return; }
+    const date = q('#afDate').value || state.today;
+    const unit = await unitOn(st.code, date);
+    const [holdings, sales] = await Promise.all([db.holdings.toArray(), db.sales.toArray()]);
+    const held = Math.min(heldQtyOn(holdings, sales, st.key, date), heldQtyOn(holdings, sales, st.key, '9999-12-31'));
+    if (mode === 'in') {
+      const fromSavings = q('#afSavings').checked;
+      let lotId;
+      let savingId;
+      await db.transaction('rw', db.holdings, db.savings, async () => {
+        lotId = await db.holdings.add({ code: st.code, name: st.name, assetType: st.assetType, market: 'NONE', currency: 'KRW', qty: value / unit, price: unit, date, fx: 1 });
+        if (fromSavings) savingId = await db.savings.add({ date, amount: -value, type: 'invest', memo: `투자 이동 · ${st.name}` });
+      });
+      closeSheet();
+      await refresh();
+      showToast(`${st.name} ${hint.in} +${won(value)}`, async () => {
+        await db.holdings.delete(lotId);
+        if (savingId) await db.savings.delete(savingId);
+        await refresh();
+      });
+    } else if (mode === 'out') {
+      const qty = value / unit;
+      if (qty > held + 1e-6) { showToast(`${date} 기준 최대 ${won(held * unit)}까지 ${hint.out}할 수 있습니다`); return; }
+      const toSavings = q('#afSavings').checked;
+      const sale = { key: st.key, code: st.code, date, qty: Math.min(qty, held), price: unit, currency: 'KRW', fx: 1, toSavings };
+      let saleId;
+      await db.transaction('rw', db.sales, db.savings, async () => {
+        if (toSavings) sale.savingId = await db.savings.add({ date, amount: value, type: 'sell', memo: `${hint.out} · ${st.name}` });
+        saleId = await db.sales.add(sale);
+      });
+      closeSheet();
+      await refresh();
+      showToast(`${st.name} ${hint.out} −${won(value)}`, async () => {
+        await db.sales.delete(saleId);
+        if (sale.savingId) await db.savings.delete(sale.savingId);
+        await refresh();
+      });
+      if (toSavings) await maybeShowOverflow();
+    } else {
+      if (!held) { showToast(`${date}에는 남은 금액이 없습니다`); return; }
+      const prev = await db.prices.get([st.code, date]);
+      await db.prices.put({ code: st.code, date, close: value / held, value });
+      closeSheet();
+      await refresh();
+      showToast(`${st.name} 가치 ${won(value)}`, async () => {
+        if (prev) await db.prices.put(prev); else await db.prices.delete([st.code, date]);
+        await refresh();
+      });
+    }
+  };
+  amount.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  q('#afSave').addEventListener('click', save);
 }
 
 // ───────────────────────── 매도 ─────────────────────────
@@ -925,7 +1203,7 @@ async function deleteSale(id) {
 // ───────────────────────── 투자 종목 등록 ─────────────────────────
 // transfer: 저축에서 옮길 금액 (한도 초과 팝업에서 열면 초과 금액이 채워져 있다)
 
-const MARKET_LABEL = { KR: '국내 주식 · 원화', US: '미국 주식 · 달러', NONE: '직접 평가 자산 (시세 없음)' };
+const MARKET_LABEL = { KR: '국내 주식 · 원화', US: '미국 주식 · 달러', NONE: '종목코드를 넣어 주세요 — 현금·부동산 등은 위에서 종류를 고르세요' };
 
 // 단가 입력: 원화는 정수, 달러는 소수점 둘째 자리까지
 function bindPriceInput(input, getCurrency) {
@@ -947,11 +1225,11 @@ const readNumber = (input) => Number(input.value.replace(/,/g, '')) || 0;
 function openHoldingSheet(transfer = 0, preset = null) {
   const editing = preset?.id ? preset : null;
   const sheet = openSheet(`
-    <h4>${editing ? '매수 기록 수정' : preset ? `${esc(preset.name || preset.code)} 추가 매수` : '투자 종목 등록'}</h4>
+    ${editing ? '<h4>매수 기록 수정</h4>' : preset ? `<h4>${esc(preset.name || preset.code)} 추가 매수</h4>` : assetSegHTML('stock')}
     ${transfer ? `<div class="note">저축 한도 초과분 <b>${won(transfer)}</b>을 투자로 옮깁니다.</div>` : ''}
-    <label class="field"><span>종목코드 — 국내 6자리 숫자 · 미국 티커 · 비우면 직접 평가</span>
+    <label class="field"><span>종목코드 — 국내 6자리 숫자 · 미국 티커</span>
       <input id="hdCode" maxlength="10" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="005930 또는 AAPL"></label>
-    <div class="market-badge" id="hdMarket">${MARKET_LABEL.NONE}</div>
+    <div class="market-badge" id="hdMarket">종목코드를 넣으면 국내·미국을 알아서 구분합니다</div>
     <label class="field"><span>종목명</span><input id="hdName" placeholder="비우면 국내 종목은 시세 받을 때 채워짐"></label>
     <div class="row">
       <label class="field" style="flex:1"><span>보유 수량</span><input id="hdQty" inputmode="decimal" placeholder="10"></label>
@@ -968,6 +1246,7 @@ function openHoldingSheet(transfer = 0, preset = null) {
     ${editing ? '<button class="danger-link" id="hdDelete">이 매수 기록 삭제</button>' : ''}
   `);
   const q = (id) => sheet.querySelector(id);
+  bindAssetSeg(sheet, transfer);
   let market = 'NONE';
   let fxTouched = false;
   const currency = () => currencyOf(market);
@@ -1035,7 +1314,8 @@ function openHoldingSheet(transfer = 0, preset = null) {
   q('#hdSave').addEventListener('click', async () => {
     const code = q('#hdCode').value.trim().toUpperCase();
     const m = marketOf(code);
-    if (!m) { q('#hdCode').focus(); return; }
+    // 코드 없는 자산은 위에서 현금·유동자산·부동산·기타를 고른다 (예전 '직접 평가 자산'을 고칠 때만 예외)
+    if (!m || (m === 'NONE' && !(editing && !editing.code))) { q('#hdCode').focus(); return; }
     let qty = readNumber(q('#hdQty'));
     let price = readNumber(q('#hdPrice'));
     const fx = m === 'US' ? readNumber(q('#hdFx')) : 1;
@@ -1233,6 +1513,8 @@ async function renderHistory() {
 }
 
 function holdingDetail(h) {
+  const type = assetTypeOf(h);
+  if (type !== 'stock') return `${ASSET_TYPES[type]} · ${won(h.qty * h.price)} · ${h.date}`;
   const parts = [h.code ? `${esc(h.code)} ${h.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가'];
   if (h.currency === 'USD') parts.push(`${h.qty}주 × $${h.price.toLocaleString('en-US', { maximumFractionDigits: 2 })} × ${num(h.fx)}원`);
   else parts.push(`${h.qty}주 × ${num(h.price)}원`);
@@ -1250,7 +1532,8 @@ async function onHistoryClick(e) {
   const edit = e.target.closest('[data-edit-holding]');
   if (edit) {
     const h = await db.holdings.get(Number(edit.dataset.editHolding));
-    if (h) openHoldingSheet(0, h);
+    if (h && assetTypeOf(h) !== 'stock') openAssetEditor(holdingKey(h));
+    else if (h) openHoldingSheet(0, h);
     return;
   }
   const b = e.target.closest('button.del');

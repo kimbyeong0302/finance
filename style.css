@@ -456,6 +456,23 @@ main { padding: 0 16px; }
 #view-history h3 small { font-weight: 500; color: var(--muted); margin-left: 4px; }
 [data-edit-income] { cursor: pointer; }
 
+.asset-seg { overflow-x: auto; scrollbar-width: none; }
+.asset-seg button { flex: 1 0 auto; padding: 9px 10px; font-size: 14px; white-space: nowrap; }
+.asset-group { margin-top: 6px; }
+.stock-row:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 12px; }
+.asset-group + .asset-group { margin-top: 14px; }
+.asset-group-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-weight: 700; color: var(--text-2); padding: 6px 0 2px; }
+.asset-group-head b { font-variant-numeric: tabular-nums; color: var(--text); }
+.asset-group .stock-row:first-of-type { border-top: 0; }
+.alloc-legend small { font-size: 11px; color: var(--muted); }
+#stockSection .alloc { margin-top: 14px; }
+.asset-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.asset-title input { flex: 1; min-width: 0; border: 0; background: none; font-size: 20px; font-weight: 800; padding: 4px 0; border-bottom: 2px solid transparent; }
+.asset-title input:focus { outline: none; border-bottom-color: var(--link); }
+.type-badge { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; color: var(--chip); background: color-mix(in srgb, var(--chip) 14%, transparent); white-space: nowrap; }
+.sheet-actions .save.ghost { font-size: 15px; padding: 14px 6px; }
+#afAll { margin: 4px 0 6px; }
+
 /* ───────── 팝업 ───────── */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 30; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fade .2s; }
 .modal { background: var(--card); border-radius: 24px; padding: 24px 20px 18px; width: 100%; max-width: 360px; animation: pop .22s cubic-bezier(.2, .8, .2, 1); }

@@ -19,6 +19,20 @@ export function marketOf(code) {
   return null; // 알 수 없는 형식
 }
 
+// 자산 종류. 주식 말고는 시세가 없고, 금액 단위(1원 = 1단위)로 넣고 빼며 '가치 갱신'으로 평가액을 바꾼다.
+export const ASSET_TYPES = {
+  stock: '주식',
+  cash: '현금',
+  liquid: '유동자산',
+  realestate: '부동산',
+  other: '기타',
+};
+
+export function assetTypeOf(h) {
+  if (h.assetType) return h.assetType;
+  return h.market === 'KR' || h.market === 'US' ? 'stock' : 'other';
+}
+
 export function currencyOf(market) {
   return market === 'US' ? 'USD' : 'KRW';
 }
@@ -151,6 +165,7 @@ export function computePortfolio({ holdings = [], sales = [], prices = [], manua
     const principal = now.costKrw;
     return {
       key,
+      assetType: assetTypeOf(first),
       code: first.code || '',
       name: first.name || first.code || '직접 평가 자산',
       market: first.market || (first.code ? 'KR' : 'NONE'),
@@ -199,7 +214,10 @@ export function computePortfolio({ holdings = [], sales = [], prices = [], manua
   stocks.sort((a, b) => b.value - a.value || b.realized - a.realized);
   enrichedSales.sort((a, b) => byDate(b, a) || b.id - a.id);
   const realized = enrichedSales.reduce((s, x) => s + (x.realized || 0), 0);
-  return { dates: sorted, total, stocks, sales: enrichedSales, realized };
+  // 자산 종류별 현재 평가액
+  const byType = {};
+  for (const st of stocks) byType[st.assetType] = (byType[st.assetType] || 0) + st.value;
+  return { dates: sorted, total, stocks, sales: enrichedSales, realized, byType };
 }
 
 // 그날 그 종목을 몇 주 갖고 있었나 (매도 수량 확인용)

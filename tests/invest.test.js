@@ -126,3 +126,24 @@ test('전량 매도 후에는 종목 선이 끊기고, 미국 주식은 매도 �
   assert.equal(heldQtyOn(holdings, sales, 'AAPL', '2026-10-03'), 0);
   assert.equal(heldQtyOn(holdings, sales, 'AAPL', '2026-10-03', 7), 2);
 });
+
+test('현금·부동산 같은 비주식 자산: 금액 단위로 넣고 빼고, 가치 갱신', () => {
+  const holdings = [
+    { id: 1, code: '@cash', name: '파킹통장', assetType: 'cash', market: 'NONE', currency: 'KRW', qty: 1000000, price: 1, date: '2026-10-01', fx: 1 },
+    { id: 2, code: '@home', name: '아파트', assetType: 'realestate', market: 'NONE', currency: 'KRW', qty: 300000000, price: 1, date: '2026-10-01', fx: 1 },
+    // 가치 갱신(단위가 1.1) 뒤 추가 납입은 그때 단위 가격으로 들어간다
+    { id: 3, code: '@home', name: '아파트', assetType: 'realestate', market: 'NONE', currency: 'KRW', qty: 10000000 / 1.1, price: 1.1, date: '2026-10-05', fx: 1 },
+  ];
+  const sales = [{ id: 1, key: '@cash', code: '@cash', date: '2026-10-03', qty: 400000, price: 1, currency: 'KRW', fx: 1 }];
+  const prices = [{ code: '@home', date: '2026-10-04', close: 1.1 }];
+  const r = computePortfolio({ holdings, sales, prices, today: '2026-10-06' });
+  const cash = r.stocks.find((x) => x.key === '@cash');
+  const home = r.stocks.find((x) => x.key === '@home');
+  assert.equal(cash.value, 600000);
+  assert.equal(cash.realized, 0);
+  assert.equal(cash.assetType, 'cash');
+  assert.ok(Math.abs(home.value - 340000000) < 1e-3);
+  assert.ok(Math.abs(home.principal - 310000000) < 1e-3);
+  assert.ok(Math.abs(r.byType.realestate - 340000000) < 1e-3);
+  assert.equal(r.byType.cash, 600000);
+});
