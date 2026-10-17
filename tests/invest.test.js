@@ -87,3 +87,42 @@ test('종목별: 같은 종목은 합치고 평균 매수가·현재가·수익�
   assert.deepEqual(aapl.series, [null, 154000, 154000]);
   assert.equal(aapl.principal, 130000);
 });
+
+import { computePortfolio, heldQtyOn } from '../js/invest.js';
+
+test('매도: 평균단가법 실현손익, 남은 원금·평가액, 그래프 이력 유지', () => {
+  const holdings = [
+    { id: 1, code: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', qty: 10, price: 60000, date: '2026-10-01', fx: 1 },
+    { id: 2, code: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', qty: 10, price: 70000, date: '2026-10-02', fx: 1 },
+  ];
+  const sales = [{ id: 1, key: '005930', code: '005930', date: '2026-10-03', qty: 5, price: 80000, currency: 'KRW', fx: 1 }];
+  const prices = [{ code: '005930', date: '2026-10-03', close: 80000 }];
+  const r = computePortfolio({ holdings, sales, prices, today: '2026-10-04' });
+  // 평균단가 65,000 → 5주 원가 325,000, 매도 400,000 → 실현 +75,000
+  assert.equal(r.realized, 75000);
+  assert.equal(r.sales[0].proceeds, 400000);
+  assert.equal(r.sales[0].basis, 325000);
+  const st = r.stocks[0];
+  assert.equal(st.qty, 15);
+  assert.equal(st.avgPrice, 65000);
+  assert.equal(st.principal, 975000);
+  assert.equal(st.value, 1200000);
+  assert.deepEqual(r.total.map((p) => [p.date, p.principal, p.value]), [
+    ['2026-10-01', 600000, 600000],
+    ['2026-10-02', 1300000, 1300000],
+    ['2026-10-03', 975000, 1200000],
+    ['2026-10-04', 975000, 1200000],
+  ]);
+});
+
+test('전량 매도 후에는 종목 선이 끊기고, 미국 주식은 매도 시 환율로 계산', () => {
+  const holdings = [{ id: 1, code: 'AAPL', name: '애플', market: 'US', currency: 'USD', qty: 2, price: 100, date: '2026-10-01', fx: 1300 }];
+  const sales = [{ id: 7, key: 'AAPL', code: 'AAPL', date: '2026-10-02', qty: 2, price: 120, currency: 'USD', fx: 1400 }];
+  const r = computePortfolio({ holdings, sales, prices: [], today: '2026-10-05' });
+  assert.equal(r.realized, 2 * 120 * 1400 - 2 * 100 * 1300);
+  assert.deepEqual(r.stocks[0].series, [260000, 0, null]);
+  assert.equal(r.stocks[0].qty, 0);
+  assert.equal(heldQtyOn(holdings, sales, 'AAPL', '2026-10-01'), 2);
+  assert.equal(heldQtyOn(holdings, sales, 'AAPL', '2026-10-03'), 0);
+  assert.equal(heldQtyOn(holdings, sales, 'AAPL', '2026-10-03', 7), 2);
+});

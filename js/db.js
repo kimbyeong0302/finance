@@ -10,7 +10,7 @@ db.version(1).stores({
   monthlyBudgets: '[ym+categoryId], ym, categoryId',
   // { id, date, ym, categoryId, amount, memo }
   expenses: '++id, date, ym, categoryId, [ym+categoryId]',
-  // { id, date, amount(+/−), type: 'settle' | 'manual' | 'invest', memo }
+  // { id, date, amount(+/−), type: 'settle' | 'manual' | 'invest' | 'sell', memo }
   savings: '++id, date, type',
   // { id, code, name, qty, price, date }
   holdings: '++id, code, date',
@@ -36,7 +36,13 @@ db.version(2).stores({
   h.fx = h.fx || 1;
 }));
 
-export const TABLES = ['categories', 'monthlyBudgets', 'expenses', 'savings', 'holdings', 'prices', 'fxRates', 'valuations', 'settlements', 'settings'];
+// v3: 매도 기록
+db.version(3).stores({
+  // { id, key(종목 열쇠), code, date, qty, price(현지 통화), currency, fx(매도 시 환율), toSavings, savingId, memo }
+  sales: '++id, date, key',
+});
+
+export const TABLES = ['categories', 'monthlyBudgets', 'expenses', 'savings', 'holdings', 'sales', 'prices', 'fxRates', 'valuations', 'settlements', 'settings'];
 
 // 백업 파일에 넣지 않는 설정 (API 키)
 const SECRET_KEYS = ['apiKey', 'avKey'];

@@ -30,6 +30,7 @@
           <span><i class="saving"></i>저축 <b id="legendSaving">0원</b></span>
           <span><i class="invest"></i>투자 <b id="legendInvest">0원</b></span>
         </div>
+        <div class="hero-realized" id="heroRealized" hidden></div>
       </header>
 
       <div class="quick">
@@ -81,6 +82,7 @@
             <div class="eyebrow"><span class="step">3</span>투자</div>
             <div class="headline" id="investValue">0원</div>
             <div class="invest-sub"><span class="gain" id="investGain"></span><span class="muted small" id="investPrincipal"></span></div>
+            <div class="invest-realized" id="investRealized" hidden></div>
           </div>
         </div>
         <div class="sub-head" id="totalHead">전체 평가액</div>
@@ -119,6 +121,8 @@
       <ul class="list" id="savingList"></ul>
       <h3>투자 종목</h3>
       <ul class="list" id="holdingList"></ul>
+      <h3>매도 기록</h3>
+      <ul class="list" id="saleList"></ul>
       <h3>평가액 직접 입력</h3>
       <ul class="list" id="valuationList"></ul>
     </section>

@@ -7,7 +7,7 @@ import {
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
 import { catchUpPrices, fxOn } from './prices.js';
-import { buildSeries, buildStockSeries, costKRW, currencyOf, latestPoint, marketOf } from './invest.js';
+import { computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -192,9 +192,20 @@ async function renderSavings() {
 
 // ───────────────────────── 투자 꺾은선 ─────────────────────────
 
+// 매수·매도·시세·환율·수동 평가액을 모두 모아 계산
+async function loadPortfolio() {
+  const [holdings, sales, prices, manual, fxRates] = await Promise.all([
+    db.holdings.toArray(), db.sales.toArray(), db.prices.toArray(), db.valuations.toArray(), db.fxRates.toArray(),
+  ]);
+  return { holdings, rawSales: sales, ...computePortfolio({ holdings, sales, prices, manual, fxRates, today: state.today }) };
+}
+
 async function investSeries() {
-  const [holdings, prices, manual, fx] = await Promise.all([db.holdings.toArray(), db.prices.toArray(), db.valuations.toArray(), db.fxRates.toArray()]);
-  return buildSeries(holdings, prices, manual, state.today, fx);
+  return (await loadPortfolio()).total;
+}
+
+function signedWon(v) {
+  return `${v > 0 ? '+' : v < 0 ? '−' : ''}${num(Math.abs(v))}원`;
 }
 
 function cssVar(name) {
@@ -216,7 +227,8 @@ function gainText(gain, principal) {
 }
 
 async function renderInvest() {
-  const series = await investSeries();
+  const pf = await loadPortfolio();
+  const series = pf.total;
   $('#investEmpty').hidden = series.length > 0;
   $('#investChart').parentElement.hidden = !series.length;
   $('#totalHead').hidden = !series.length;
@@ -225,6 +237,9 @@ async function renderInvest() {
   const gain = last.value - last.principal;
   $('#investValue').textContent = won(last.value);
   $('#investPrincipal').textContent = series.length ? `원금 ${won(last.principal)}` : '';
+  const r = $('#investRealized');
+  r.hidden = !pf.sales.length;
+  r.innerHTML = `실현손익 <b class="gain ${pf.realized > 0 ? 'up' : pf.realized < 0 ? 'down' : ''}">${signedWon(pf.realized)}</b> · 매도 ${pf.sales.length}건`;
   const g = $('#investGain');
   g.textContent = series.length ? gainText(gain, last.principal) : '';
   g.className = `gain ${gain > 0 ? 'up' : gain < 0 ? 'down' : ''}`;
@@ -299,14 +314,22 @@ function rateText(rate) {
 }
 
 async function renderStocks() {
-  const [holdings, prices, fx] = await Promise.all([db.holdings.toArray(), db.prices.toArray(), db.fxRates.toArray()]);
-  const { dates, stocks } = buildStockSeries(holdings, prices, state.today, fx);
+  const { dates, stocks } = await loadPortfolio();
   $('#stockSection').hidden = !stocks.length;
   if (!stocks.length) return;
   const color = (i) => STOCK_COLORS[i % STOCK_COLORS.length];
 
   $('#stockTable').innerHTML = stocks.map((st, i) => {
     const dir = st.gain > 0 ? 'up' : st.gain < 0 ? 'down' : '';
+    const rdir = st.realized > 0 ? 'up' : st.realized < 0 ? 'down' : '';
+    if (!st.qty) {
+      return `
+      <div class="stock-row sold" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 기록 보기">
+        <i class="stock-dot" style="background:${color(i)}"></i>
+        <div class="stock-name"><b>${esc(st.name)}<em class="edit-hint">기록 ›</em></b><span>${st.code ? esc(st.code) : '직접 평가'} · 전량 매도</span></div>
+        <div class="stock-value"><span class="muted small">실현손익</span><b class="gain ${rdir}">${signedWon(st.realized)}</b></div>
+      </div>`;
+    }
     const sub = [st.code ? `${esc(st.code)} ${st.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가', `${Number(st.qty.toFixed(4))}주`].join(' · ');
     return `
       <div class="stock-row" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 수정">
@@ -317,6 +340,7 @@ async function renderStocks() {
           <span>매수가 <b>${priceText(st.avgPrice, st.currency)}</b></span>
           <span>현재가 <b>${priceText(st.lastClose, st.currency)}</b>${st.lastDate ? ` <small>${dayLabel(st.lastDate, state.today)}</small>` : ''}</span>
           <span class="gain ${dir}">${st.gain > 0 ? '+' : st.gain < 0 ? '−' : ''}${num(Math.abs(st.gain))}원</span>
+          ${st.realized ? `<span class="realized">실현 <b class="gain ${rdir}">${signedWon(st.realized)}</b></span>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -364,7 +388,15 @@ async function renderStocks() {
 
 async function renderTotal() {
   const balance = await savingsBalance();
-  const value = latestPoint(await investSeries()).value;
+  const pf = await loadPortfolio();
+  const value = latestPoint(pf.total).value;
+  const hr = $('#heroRealized');
+  hr.hidden = !pf.sales.length;
+  if (pf.sales.length) {
+    const last = pf.sales[0];
+    hr.innerHTML = `투자 매도 실현손익 <b class="gain ${pf.realized > 0 ? 'up' : pf.realized < 0 ? 'down' : ''}">${signedWon(pf.realized)}</b>`
+      + `<span class="muted"> · 최근 ${dayLabel(last.date, state.today)} ${esc(last.name)} ${signedWon(last.realized)}</span>`;
+  }
   const total = balance + value;
   $('#total').textContent = num(total);
   $('#legendSaving').textContent = won(balance);
@@ -617,26 +649,168 @@ function openSavingSheet() {
 // 종목 표에서 누르면: 매수 기록이 하나면 바로 수정, 여러 건이면 고르는 시트
 
 async function openStockEditor(key) {
-  const all = await db.holdings.toArray();
-  const lots = all.filter((h) => (h.code ? h.code : `id:${h.id}`) === key).sort((a, b) => a.date.localeCompare(b.date));
-  if (!lots.length) return;
-  if (lots.length === 1) { openHoldingSheet(0, lots[0]); return; }
-  const first = lots[0];
+  const pf = await loadPortfolio();
+  const st = pf.stocks.find((x) => x.key === key);
+  const lots = pf.holdings.filter((h) => holdingKey(h) === key).sort((a, b) => a.date.localeCompare(b.date));
+  if (!st || !lots.length) return;
+  const sales = pf.sales.filter((x) => x.key === key);
+  const short = sales.some((x) => x.short > 1e-9);
   const sheet = openSheet(`
-    <h4>${esc(first.name || first.code)} 매수 기록</h4>
-    <p class="muted small">고칠 기록을 누르세요. 일부를 팔았다면 해당 기록의 수량을 줄이면 됩니다.</p>
+    <h4>${esc(st.name)}</h4>
+    <div class="stock-summary">
+      ${st.qty ? `<div><span>보유</span><b>${Number(st.qty.toFixed(4))}주</b></div>
+      <div><span>평균 매수가</span><b>${priceText(st.avgPrice, st.currency)}</b></div>
+      <div><span>평가액</span><b>${won(st.value)}</b></div>` : '<div><span>보유</span><b>전량 매도</b></div>'}
+      ${sales.length ? `<div><span>실현손익</span><b class="gain ${st.realized > 0 ? 'up' : st.realized < 0 ? 'down' : ''}">${signedWon(st.realized)}</b></div>` : ''}
+    </div>
+    ${short ? '<div class="note warn">매수 기록보다 많이 판 매도 기록이 있습니다. 매수 기록이나 매도 기록을 확인하세요.</div>' : ''}
+    <div class="row sheet-actions">
+      <button class="save" id="skSell" ${st.qty ? '' : 'disabled'}>매도</button>
+      ${st.code ? '<button class="save ghost" id="skBuy">추가 매수</button>' : ''}
+    </div>
+    <h5 class="sheet-sub">매수 기록 <small>누르면 수정</small></h5>
     <ul class="list lot-list">${lots.map((h) => `
       <li data-lot="${h.id}" role="button" tabindex="0">
         <div class="grow"><div>${h.date}</div><div class="sub">${holdingDetail(h)}</div></div>
         <div class="amt">${num(costKRW(h))}</div><span class="chev">›</span>
       </li>`).join('')}</ul>
-    <button class="save" id="lotAdd">+ 같은 종목 추가 매수</button>
+    ${sales.length ? `<h5 class="sheet-sub">매도 기록</h5>
+    <ul class="list lot-list">${sales.map((x) => `
+      <li>
+        <div class="grow"><div>${x.date}</div><div class="sub">${saleDetail(x)}</div></div>
+        <div class="amt gain ${x.realized > 0 ? 'up' : x.realized < 0 ? 'down' : ''}">${signedWon(x.realized)}</div>
+        <button class="del" data-del-sale="${x.id}" aria-label="매도 기록 삭제">×</button>
+      </li>`).join('')}</ul>` : ''}
   `);
-  sheet.querySelector('.lot-list').addEventListener('click', (e) => {
+  sheet.addEventListener('click', async (e) => {
     const li = e.target.closest('[data-lot]');
-    if (li) openHoldingSheet(0, lots.find((h) => h.id === Number(li.dataset.lot)));
+    if (li) { openHoldingSheet(0, lots.find((h) => h.id === Number(li.dataset.lot))); return; }
+    const del = e.target.closest('[data-del-sale]');
+    if (del) { closeSheet(); await deleteSale(Number(del.dataset.delSale)); }
   });
-  sheet.querySelector('#lotAdd').addEventListener('click', () => openHoldingSheet(0, { code: first.code, name: first.name }));
+  sheet.querySelector('#skSell')?.addEventListener('click', () => openSellSheet(st));
+  sheet.querySelector('#skBuy')?.addEventListener('click', () => openHoldingSheet(0, { code: lots[0].code, name: lots[0].name }));
+}
+
+function saleDetail(x) {
+  const p = x.currency === 'USD'
+    ? `$${x.price.toLocaleString('en-US', { maximumFractionDigits: 2 })} × ${num(x.fx)}원`
+    : `${num(x.price)}원`;
+  return `${Number(x.qty.toFixed(4))}주 × ${p} = ${won(x.proceeds)} · ${x.toSavings ? '저축으로' : '저축 안 함'}`;
+}
+
+// ───────────────────────── 매도 ─────────────────────────
+
+async function openSellSheet(st) {
+  const usd = st.currency === 'USD';
+  const avgCostKrw = st.qty ? st.principal / st.qty : 0; // 1주당 원가 (원화)
+  const sheet = openSheet(`
+    <h4>${esc(st.name)} 매도</h4>
+    <div class="note">보유 <b>${Number(st.qty.toFixed(4))}주</b> · 평균 매수가 <b>${priceText(st.avgPrice, st.currency)}</b></div>
+    <div class="row">
+      <label class="field" style="flex:1"><span>매도 수량</span>
+        <span class="input-with-btn"><input id="slQty" inputmode="decimal" placeholder="0"><button type="button" class="pill" id="slAll">전량</button></span></label>
+    </div>
+    <div class="row">
+      <label class="field" style="flex:1"><span>매도 단가 (${usd ? '달러' : '원'})</span><input id="slPrice" inputmode="decimal" value="${st.lastClose != null ? st.lastClose.toLocaleString('ko-KR', { maximumFractionDigits: usd ? 2 : 0 }) : ''}"></label>
+      <label class="field" style="flex:1"><span>매도일</span><input id="slDate" type="date" value="${state.today}" max="${state.today}"></label>
+    </div>
+    ${usd ? '<label class="field"><span>매도 시 환율 (원/달러)</span><input id="slFx" inputmode="decimal"></label>' : ''}
+    <label class="check"><input type="checkbox" id="slToSavings" checked><span>매도 금액을 저축으로 옮기기<small>끄면 총자산에서 빠져나간 돈(출금)으로 기록됩니다</small></span></label>
+    <div class="sell-preview" id="slPreview"></div>
+    <button class="save" id="slSave">매도 기록</button>
+  `);
+  const q = (id) => sheet.querySelector(id);
+  bindPriceInput(q('#slPrice'), () => st.currency);
+  if (usd) bindPriceInput(q('#slFx'), () => 'USD');
+  let fxTouched = false;
+  const prefillFx = async () => {
+    if (!usd || fxTouched) return;
+    const rate = await fxOn(q('#slDate').value || state.today);
+    if (fxTouched) return;
+    q('#slFx').value = rate ? rate.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '';
+    preview();
+  };
+  const preview = () => {
+    const qty = readNumber(q('#slQty'));
+    const proceeds = qty * readNumber(q('#slPrice')) * (usd ? readNumber(q('#slFx')) : 1);
+    if (!qty || !proceeds) { q('#slPreview').innerHTML = ''; return; }
+    const basis = qty * avgCostKrw;
+    const realized = proceeds - basis;
+    const dir = realized > 0 ? 'up' : realized < 0 ? 'down' : '';
+    q('#slPreview').innerHTML = `
+      <div><span>매도 금액</span><b>${won(proceeds)}</b></div>
+      <div><span>매수 원가</span><b>${won(basis)}</b></div>
+      <div><span>실현손익</span><b class="gain ${dir}">${signedWon(realized)} (${rateText(basis ? (realized / basis) * 100 : 0)})</b></div>
+      <div class="muted small">${q('#slToSavings').checked ? `총자산 변화 없음 — 투자 ${won(proceeds)} → 저축` : `총자산 −${won(proceeds)} (출금)`}</div>`;
+  };
+  q('#slAll').addEventListener('click', () => { q('#slQty').value = String(Number(st.qty.toFixed(6))); preview(); });
+  q('#slDate').addEventListener('change', prefillFx);
+  if (usd) q('#slFx').addEventListener('input', () => { fxTouched = true; });
+  for (const id of ['#slQty', '#slPrice', '#slFx', '#slToSavings']) q(id)?.addEventListener('input', preview);
+  q('#slToSavings').addEventListener('change', preview);
+  q('#slQty').focus();
+  prefillFx();
+
+  q('#slSave').addEventListener('click', async () => {
+    const qty = readNumber(q('#slQty'));
+    const price = readNumber(q('#slPrice'));
+    const fx = usd ? readNumber(q('#slFx')) : 1;
+    const date = q('#slDate').value || state.today;
+    if (!qty) { q('#slQty').focus(); return; }
+    if (!price) { q('#slPrice').focus(); return; }
+    if (!fx) { q('#slFx').focus(); return; }
+    const [holdings, sales] = await Promise.all([db.holdings.toArray(), db.sales.toArray()]);
+    const heldThen = heldQtyOn(holdings, sales, st.key, date);
+    const heldNow = heldQtyOn(holdings, sales, st.key, '9999-12-31');
+    const max = Math.min(heldThen, heldNow);
+    if (qty > max + 1e-9) {
+      showToast(`${date}에 팔 수 있는 수량은 최대 ${Number(max.toFixed(4))}주입니다`);
+      q('#slQty').focus();
+      return;
+    }
+    const toSavings = q('#slToSavings').checked;
+    const proceeds = qty * price * fx;
+    const sale = { key: st.key, code: st.code, date, qty, price, currency: st.currency, fx, toSavings };
+    let saleId;
+    await db.transaction('rw', db.sales, db.savings, async () => {
+      if (toSavings) sale.savingId = await db.savings.add({ date, amount: Math.round(proceeds), type: 'sell', memo: `매도 · ${st.name}` });
+      saleId = await db.sales.add(sale);
+    });
+    closeSheet();
+    await refresh();
+    showToast(`${st.name} ${Number(qty.toFixed(4))}주 매도 기록`, async () => {
+      await db.transaction('rw', db.sales, db.savings, async () => {
+        await db.sales.delete(saleId);
+        if (sale.savingId) await db.savings.delete(sale.savingId);
+      });
+      await refresh();
+    });
+    if (toSavings) await maybeShowOverflow();
+  });
+}
+
+async function deleteSale(id) {
+  const sale = await db.sales.get(id);
+  if (!sale) return;
+  const saving = sale.savingId ? await db.savings.get(sale.savingId) : null;
+  const ok = await showModal(
+    `매도 기록을 삭제할까요?\n${sale.date} · ${sale.qty}주${saving ? `\n저축으로 옮긴 매도 대금 ${won(saving.amount)}도 함께 지워집니다.` : ''}`,
+    [{ key: 'no', label: '취소' }, { key: 'yes', label: '삭제', primary: true }],
+  );
+  if (ok !== 'yes') return;
+  await db.transaction('rw', db.sales, db.savings, async () => {
+    await db.sales.delete(id);
+    if (saving) await db.savings.delete(saving.id);
+  });
+  await refresh();
+  showToast('매도 기록 삭제', async () => {
+    await db.transaction('rw', db.sales, db.savings, async () => {
+      await db.sales.put(sale);
+      if (saving) await db.savings.put(saving);
+    });
+    await refresh();
+  });
 }
 
 // ───────────────────────── 투자 종목 등록 ─────────────────────────
@@ -903,7 +1077,7 @@ async function renderHistory() {
       </li>`).join('')
     : '<li class="empty">지출 내역이 없습니다</li>';
 
-  const TYPE = { settle: '정산', manual: '직접 입력', invest: '투자 이동' };
+  const TYPE = { settle: '정산', manual: '직접 입력', invest: '투자 이동', sell: '매도 대금' };
   const savings = (await db.savings.orderBy('date').reverse().toArray());
   $('#savingList').innerHTML = savings.length ? savings.map((s) => `
     <li>
@@ -919,6 +1093,14 @@ async function renderHistory() {
       <div class="amt">${num(costKRW(h))}</div>
       <button class="del" data-del-holding="${h.id}" aria-label="삭제">×</button>
     </li>`).join('') : '<li class="empty">등록된 종목이 없습니다</li>';
+
+  const pf = await loadPortfolio();
+  $('#saleList').innerHTML = pf.sales.length ? pf.sales.map((x) => `
+    <li>
+      <div class="grow"><div>${esc(x.name)}</div><div class="sub">${x.date} · ${saleDetail(x)}</div></div>
+      <div class="amt gain ${x.realized > 0 ? 'up' : x.realized < 0 ? 'down' : ''}">${signedWon(x.realized)}</div>
+      <button class="del" data-del-sale="${x.id}" aria-label="삭제">×</button>
+    </li>`).join('') : '<li class="empty">매도 기록이 없습니다</li>';
 
   const vals = await db.valuations.orderBy('date').reverse().toArray();
   $('#valuationList').innerHTML = vals.length ? vals.map((v) => `
@@ -954,6 +1136,7 @@ async function onHistoryClick(e) {
     showToast('지출 삭제', async () => { await db.expenses.put(row); await refresh(); });
     return;
   }
+  if (b.dataset.delSale) { await deleteSale(Number(b.dataset.delSale)); return; }
   if ((await showModal('이 기록을 삭제할까요?', [{ key: 'no', label: '취소' }, { key: 'yes', label: '삭제', primary: true }])) !== 'yes') return;
   if (b.dataset.delSaving) await db.savings.delete(Number(b.dataset.delSaving));
   if (b.dataset.delHolding) await db.holdings.delete(Number(b.dataset.delHolding));
