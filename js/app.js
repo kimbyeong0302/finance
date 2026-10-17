@@ -309,9 +309,9 @@ async function renderStocks() {
     const dir = st.gain > 0 ? 'up' : st.gain < 0 ? 'down' : '';
     const sub = [st.code ? `${esc(st.code)} ${st.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가', `${Number(st.qty.toFixed(4))}주`].join(' · ');
     return `
-      <div class="stock-row">
+      <div class="stock-row" data-stock="${esc(st.key)}" role="button" tabindex="0" aria-label="${esc(st.name)} 수정">
         <i class="stock-dot" style="background:${color(i)}"></i>
-        <div class="stock-name"><b>${esc(st.name)}</b><span>${sub}</span></div>
+        <div class="stock-name"><b>${esc(st.name)}<em class="edit-hint">편집 ›</em></b><span>${sub}</span></div>
         <div class="stock-value"><b>${num(st.value)}원</b><span class="gain ${dir}">${rateText(st.rate)}</span></div>
         <div class="stock-prices">
           <span>매수가 <b>${priceText(st.avgPrice, st.currency)}</b></span>
@@ -613,6 +613,32 @@ function openSavingSheet() {
   sheet.querySelector('#svSave').addEventListener('click', save);
 }
 
+// ───────────────────────── 투자 종목 수정 ─────────────────────────
+// 종목 표에서 누르면: 매수 기록이 하나면 바로 수정, 여러 건이면 고르는 시트
+
+async function openStockEditor(key) {
+  const all = await db.holdings.toArray();
+  const lots = all.filter((h) => (h.code ? h.code : `id:${h.id}`) === key).sort((a, b) => a.date.localeCompare(b.date));
+  if (!lots.length) return;
+  if (lots.length === 1) { openHoldingSheet(0, lots[0]); return; }
+  const first = lots[0];
+  const sheet = openSheet(`
+    <h4>${esc(first.name || first.code)} 매수 기록</h4>
+    <p class="muted small">고칠 기록을 누르세요. 일부를 팔았다면 해당 기록의 수량을 줄이면 됩니다.</p>
+    <ul class="list lot-list">${lots.map((h) => `
+      <li data-lot="${h.id}" role="button" tabindex="0">
+        <div class="grow"><div>${h.date}</div><div class="sub">${holdingDetail(h)}</div></div>
+        <div class="amt">${num(costKRW(h))}</div><span class="chev">›</span>
+      </li>`).join('')}</ul>
+    <button class="save" id="lotAdd">+ 같은 종목 추가 매수</button>
+  `);
+  sheet.querySelector('.lot-list').addEventListener('click', (e) => {
+    const li = e.target.closest('[data-lot]');
+    if (li) openHoldingSheet(0, lots.find((h) => h.id === Number(li.dataset.lot)));
+  });
+  sheet.querySelector('#lotAdd').addEventListener('click', () => openHoldingSheet(0, { code: first.code, name: first.name }));
+}
+
 // ───────────────────────── 투자 종목 등록 ─────────────────────────
 // transfer: 저축에서 옮길 금액 (한도 초과 팝업에서 열면 초과 금액이 채워져 있다)
 
@@ -634,9 +660,11 @@ function bindPriceInput(input, getCurrency) {
 
 const readNumber = (input) => Number(input.value.replace(/,/g, '')) || 0;
 
-function openHoldingSheet(transfer = 0) {
+// preset: 기존 매수 기록(id 있음 → 수정) 또는 미리 채울 종목(id 없음 → 같은 종목 추가 매수)
+function openHoldingSheet(transfer = 0, preset = null) {
+  const editing = preset?.id ? preset : null;
   const sheet = openSheet(`
-    <h4>투자 종목 등록</h4>
+    <h4>${editing ? '매수 기록 수정' : preset ? `${esc(preset.name || preset.code)} 추가 매수` : '투자 종목 등록'}</h4>
     ${transfer ? `<div class="note">저축 한도 초과분 <b>${won(transfer)}</b>을 투자로 옮깁니다.</div>` : ''}
     <label class="field"><span>종목코드 — 국내 6자리 숫자 · 미국 티커 · 비우면 직접 평가</span>
       <input id="hdCode" maxlength="10" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="005930 또는 AAPL"></label>
@@ -650,9 +678,11 @@ function openHoldingSheet(transfer = 0) {
       <label class="field" style="flex:1"><span>매수일</span><input id="hdDate" type="date" value="${state.today}" max="${state.today}"></label>
       <label class="field" style="flex:1" id="hdFxField" hidden><span>매수 시 환율 (원/달러)</span><input id="hdFx" inputmode="decimal" placeholder="1,380.5"></label>
     </div>
-    <label class="field"><span>저축에서 차감할 금액 (원)</span><input id="hdTransfer" inputmode="numeric" value="${transfer ? num(transfer) : ''}" placeholder="0 (저축과 무관하면 비워 두기)"></label>
+    ${editing ? '<p class="muted small">저축에서 옮긴 기록은 내역 탭 → 저축에서 따로 고칠 수 있습니다.</p>'
+    : `<label class="field"><span>저축에서 차감할 금액 (원)</span><input id="hdTransfer" inputmode="numeric" value="${transfer ? num(transfer) : ''}" placeholder="0 (저축과 무관하면 비워 두기)"></label>`}
     <div class="amount-hint" id="hdHint"></div>
-    <button class="save" id="hdSave">등록</button>
+    <button class="save" id="hdSave">${editing ? '수정 저장' : '등록'}</button>
+    ${editing ? '<button class="danger-link" id="hdDelete">이 매수 기록 삭제</button>' : ''}
   `);
   const q = (id) => sheet.querySelector(id);
   let market = 'NONE';
@@ -660,8 +690,7 @@ function openHoldingSheet(transfer = 0) {
   const currency = () => currencyOf(market);
   bindPriceInput(q('#hdPrice'), currency);
   bindPriceInput(q('#hdFx'), () => 'USD');
-  bindAmountInput(q('#hdTransfer'));
-  q('#hdCode').focus();
+  if (q('#hdTransfer')) bindAmountInput(q('#hdTransfer'));
 
   const updateHint = () => {
     const cost = costKRW({ qty: readNumber(q('#hdQty')), price: readNumber(q('#hdPrice')), currency: currency(), fx: readNumber(q('#hdFx')) });
@@ -670,6 +699,7 @@ function openHoldingSheet(transfer = 0) {
   const prefillFx = async () => {
     if (market !== 'US' || fxTouched) return;
     const rate = await fxOn(q('#hdDate').value || state.today);
+    if (fxTouched) return; // 기다리는 사이 직접 입력했거나 기존 기록 값이 채워짐
     q('#hdFx').value = rate ? rate.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '';
     updateHint();
   };
@@ -691,6 +721,34 @@ function openHoldingSheet(transfer = 0) {
   q('#hdFx').addEventListener('input', () => { fxTouched = true; });
   for (const id of ['#hdQty', '#hdPrice', '#hdFx']) q(id).addEventListener('input', updateHint);
 
+  // 기존 기록이나 같은 종목으로 미리 채우기
+  if (preset) {
+    q('#hdCode').value = preset.code || '';
+    q('#hdCode').dispatchEvent(new Event('input'));
+    q('#hdName').value = preset.name && preset.name !== preset.code ? preset.name : '';
+  }
+  if (editing) {
+    const usd = editing.currency === 'USD';
+    const fmt = (v, d) => v.toLocaleString('ko-KR', { maximumFractionDigits: d });
+    q('#hdQty').value = String(editing.qty);
+    q('#hdPrice').value = fmt(editing.price, usd ? 2 : 0);
+    q('#hdDate').value = editing.date;
+    if (usd) { q('#hdFx').value = fmt(editing.fx, 2); fxTouched = true; }
+    updateHint();
+    q('#hdDelete').addEventListener('click', async () => {
+      const ok = await showModal(`${editing.name || editing.code || '이 기록'} 매수 기록을 삭제할까요?\n${editing.date} · ${editing.qty}주`, [{ key: 'no', label: '취소' }, { key: 'yes', label: '삭제', primary: true }]);
+      if (ok !== 'yes') return;
+      await db.holdings.delete(editing.id);
+      closeSheet();
+      await refresh();
+      showToast('매수 기록 삭제', async () => { await db.holdings.put(editing); await refresh(); });
+    });
+  } else if (preset) {
+    q('#hdQty').focus();
+  } else {
+    q('#hdCode').focus();
+  }
+
   q('#hdSave').addEventListener('click', async () => {
     const code = q('#hdCode').value.trim().toUpperCase();
     const m = marketOf(code);
@@ -698,7 +756,7 @@ function openHoldingSheet(transfer = 0) {
     let qty = readNumber(q('#hdQty'));
     let price = readNumber(q('#hdPrice'));
     const fx = m === 'US' ? readNumber(q('#hdFx')) : 1;
-    const move = readAmount(q('#hdTransfer'));
+    const move = q('#hdTransfer') ? readAmount(q('#hdTransfer')) : 0;
     // 종목코드 없이 금액만 옮기는 경우(펀드 등): 수량 1 × 옮긴 금액
     if (m === 'NONE' && !qty && !price && move) { qty = 1; price = move; }
     if (!qty) { q('#hdQty').focus(); return; }
@@ -706,13 +764,24 @@ function openHoldingSheet(transfer = 0) {
     if (!fx) { q('#hdFx').focus(); return; }
     const date = q('#hdDate').value || state.today;
     const name = q('#hdName').value.trim() || (m === 'NONE' ? '직접 평가 자산' : m === 'US' ? code : '');
+    const row = { code, name, market: m, currency: currencyOf(m), qty, price, date, fx };
+    const before = editing ? await db.holdings.toArray() : null; // 되돌리기용 (종목명 일괄 변경까지)
     await db.transaction('rw', db.holdings, db.savings, async () => {
-      await db.holdings.add({ code, name, market: m, currency: currencyOf(m), qty, price, date, fx });
+      if (editing) await db.holdings.put({ ...row, id: editing.id });
+      else await db.holdings.add(row);
+      // 종목명은 같은 종목의 다른 매수 기록에도 맞춘다
+      if (code && q('#hdName').value.trim()) await db.holdings.where('code').equals(code).modify({ name });
       if (move) await db.savings.add({ date, amount: -move, type: 'invest', memo: `투자 이동 · ${name || code}` });
     });
     closeSheet();
     await refresh();
-    showToast(move ? `저축 ${won(move)} → 투자` : '종목 등록 완료');
+    if (editing) {
+      showToast('매수 기록 수정', async () => {
+        await db.transaction('rw', db.holdings, async () => { await db.holdings.clear(); await db.holdings.bulkPut(before); });
+        await refresh();
+      });
+    }
+    else showToast(move ? `저축 ${won(move)} → 투자` : '종목 등록 완료');
     if (m !== 'NONE') updatePrices();
   });
 }
@@ -846,7 +915,7 @@ async function renderHistory() {
   const holdings = await db.holdings.orderBy('date').reverse().toArray();
   $('#holdingList').innerHTML = holdings.length ? holdings.map((h) => `
     <li>
-      <div class="grow"><div>${esc(h.name || h.code)}</div><div class="sub">${holdingDetail(h)}</div></div>
+      <div class="grow" data-edit-holding="${h.id}" role="button"><div>${esc(h.name || h.code)} <span class="edit-hint">편집 ›</span></div><div class="sub">${holdingDetail(h)}</div></div>
       <div class="amt">${num(costKRW(h))}</div>
       <button class="del" data-del-holding="${h.id}" aria-label="삭제">×</button>
     </li>`).join('') : '<li class="empty">등록된 종목이 없습니다</li>';
@@ -869,6 +938,12 @@ function holdingDetail(h) {
 }
 
 async function onHistoryClick(e) {
+  const edit = e.target.closest('[data-edit-holding]');
+  if (edit) {
+    const h = await db.holdings.get(Number(edit.dataset.editHolding));
+    if (h) openHoldingSheet(0, h);
+    return;
+  }
   const b = e.target.closest('button.del');
   if (!b) return;
   if (b.dataset.delExpense) {
@@ -1021,6 +1096,10 @@ function bindUI() {
   $('#savingAdd').addEventListener('click', openSavingSheet);
   $('#addHoldingBtn').addEventListener('click', () => openHoldingSheet());
   $('#addValuationBtn').addEventListener('click', openValuationSheet);
+  $('#stockTable').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-stock]');
+    if (row) openStockEditor(row.dataset.stock);
+  });
   $('#backdrop').addEventListener('click', closeSheet);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
 
