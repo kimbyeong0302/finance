@@ -473,6 +473,50 @@ main { padding: 0 16px; }
 .sheet-actions .save.ghost { font-size: 15px; padding: 14px 6px; }
 #afAll { margin: 4px 0 6px; }
 
+/* ───────── 앱 잠금 ───────── */
+html.privacy main, html.privacy .tabs, html.privacy .fab { filter: blur(24px); }
+.lock {
+  position: fixed; inset: 0; z-index: 100; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+  outline: none;
+}
+.lock-head { text-align: center; margin-bottom: 28px; }
+.lock-icon { width: 64px; height: 64px; border-radius: 18px; display: block; margin: 0 auto 14px; }
+.lock-title { font-size: 22px; font-weight: 800; }
+.lock-sub { font-size: 14px; color: var(--muted); margin-top: 6px; min-height: 20px; }
+.lock-sub.err { color: var(--over); }
+.pin-dots { display: flex; gap: 14px; justify-content: center; margin-bottom: 36px; min-height: 16px; }
+.pin-dots i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--principal); transition: background .1s; }
+.pin-dots i.on { background: var(--text); border-color: var(--text); }
+.pin-dots.shake { animation: shake .35s; }
+@keyframes shake { 20%, 60% { transform: translateX(-10px); } 40%, 80% { transform: translateX(10px); } }
+.keypad { display: grid; grid-template-columns: repeat(3, 76px); gap: 16px 28px; }
+.key {
+  width: 76px; height: 76px; border-radius: 50%; border: 0; background: var(--card); box-shadow: var(--shadow);
+  font-size: 28px; font-weight: 600; display: grid; place-items: center;
+}
+.key-del, .key-bio { background: none; box-shadow: none; font-size: 24px; color: var(--text-2); }
+.key-bio svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.lock-ok { margin: -16px 0 20px; border: 0; border-radius: 12px; background: var(--ink); color: var(--ink-on); font-weight: 700; padding: 10px 28px; }
+.lock-ok:disabled { opacity: .3; }
+.lock-foot { margin-top: 28px; min-height: 24px; }
+.lock-link { background: none; border: 0; color: var(--muted); font-size: 14px; text-decoration: underline; }
+.lock-forgot {
+  position: absolute; left: 16px; right: 16px; bottom: calc(24px + env(safe-area-inset-bottom)); max-width: 440px; margin: 0 auto;
+  background: var(--card); border-radius: 20px; padding: 18px; box-shadow: 0 10px 40px rgba(0,0,0,.2);
+}
+.lock-forgot p { margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
+.lock-forgot input { width: 100%; border: 0; background: var(--track); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+.lock-forgot .row { justify-content: flex-end; }
+.btn.danger { background: var(--over); color: #fff; }
+.btn.danger:disabled { opacity: .4; }
+.danger-text { color: var(--over); }
+.lock-status { font-size: 14px; font-weight: 600; color: var(--text-2); background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--shadow); }
+.lock-status.on { color: var(--ok); }
+#lockSettings .row { margin-bottom: 12px; }
+#lockSettings select { appearance: auto; }
+
 /* ───────── 팝업 ───────── */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 30; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fade .2s; }
 .modal { background: var(--card); border-radius: 24px; padding: 24px 20px 18px; width: 100%; max-width: 360px; animation: pop .22s cubic-bezier(.2, .8, .2, 1); }

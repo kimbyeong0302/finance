@@ -45,7 +45,8 @@ db.version(3).stores({
 export const TABLES = ['categories', 'monthlyBudgets', 'expenses', 'savings', 'holdings', 'sales', 'prices', 'fxRates', 'valuations', 'settlements', 'settings'];
 
 // 백업 파일에 넣지 않는 설정 (API 키)
-const SECRET_KEYS = ['apiKey', 'avKey'];
+// 앱 잠금(PIN 해시·Face ID 등록)도 기기마다 따로 — 백업으로 옮기지 않는다
+const SECRET_KEYS = ['apiKey', 'avKey', 'lockPin', 'lockCred', 'lockFails'];
 
 export async function getSetting(key, fallback = null) {
   const row = await db.settings.get(key);

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" class="booting">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -13,6 +13,7 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="style.css">
+  <style>html.booting body > *:not(#lock), html.locked body > *:not(#lock) { visibility: hidden !important; }</style>
   <script src="vendor/dexie.min.js"></script>
   <script src="vendor/chart.umd.js"></script>
   <script type="module" src="js/app.js"></script>
@@ -141,6 +142,8 @@
     <!-- 설정 -->
     <section class="view" id="view-settings" hidden>
       <h1 class="page-title">설정</h1>
+      <h3>앱 잠금</h3>
+      <div id="lockSettings"></div>
       <h3>총 예산</h3>
       <label class="field"><span>한 달 총 예산</span><input id="totalBudget" inputmode="numeric" placeholder="예: 1,000,000"></label>
       <p class="muted small" id="totalBudgetHint">총 예산에서 항목 예산 합계를 뺀 금액이 홈 화면 저축 카드에 '이번 달 예상 저축'으로 나옵니다.</p>
@@ -190,5 +193,7 @@
   </div>
 
   <div class="toast" id="toast" hidden></div>
+  <!-- 앱 잠금 화면 -->
+  <div class="lock" id="lock" hidden></div>
 </body>
 </html>

@@ -7,6 +7,7 @@ import {
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
 import { catchUpPrices, fxOn } from './prices.js';
+import { isLockEnabled, lockConfig, lockNow, renderLockSettings } from './lock.js';
 import { ASSET_TYPES, assetTypeOf, computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
 
@@ -37,10 +38,24 @@ async function init() {
     await db.categories.bulkAdd(DEFAULT_CATEGORIES.map((c, i) => ({ ...c, order: i, archived: false })));
   }
   bindUI();
+  // 잠금이 켜져 있으면 풀기 전까지 아무것도 보이지 않는다 (html.booting)
+  if (await isLockEnabled()) await lockNow();
+  document.documentElement.classList.remove('booting');
   await onOpen();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && Date.now() - state.lastOpenCheck > 5 * 60 * 1000) onOpen();
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'hidden') {
+      state.hiddenAt = Date.now();
+      document.documentElement.classList.add('privacy'); // 앱 전환 화면에서 내용 가리기
+      return;
+    }
+    document.documentElement.classList.remove('privacy');
+    const { pin, after } = await lockConfig();
+    if (pin && after >= 0 && state.hiddenAt && Date.now() - state.hiddenAt >= after * 1000) {
+      closeSheet();
+      await lockNow();
+    }
+    if (Date.now() - state.lastOpenCheck > 5 * 60 * 1000) onOpen();
   });
 }
 
@@ -1559,6 +1574,10 @@ async function onHistoryClick(e) {
 let draft = [];
 
 async function renderSettings() {
+  renderLockSettings($('#lockSettings'), {
+    toast: showToast,
+    confirm: (text) => showModal(text, [{ key: 'no', label: '아니요' }, { key: 'yes', label: '네', primary: true }]),
+  });
   draft = (await activeCategories()).map((c) => ({ ...c }));
   drawCategoryEditor();
   $('#savingsLimit').value = num(Number(await getSetting('savingsLimit', 0)) || 0).replace(/^0$/, '');

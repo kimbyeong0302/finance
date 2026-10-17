@@ -1,10 +1,10 @@
 // 앱 껍데기를 캐시해 오프라인에서도 열리게 한다. 데이터는 IndexedDB에 있으므로 캐시하지 않는다.
 // 파일을 바꾸면 VERSION을 올린다.
-const VERSION = 'v11';
+const VERSION = 'v12';
 const CACHE = `my-finance-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'style.css', 'manifest.json',
-  'js/app.js', 'js/db.js', 'js/ledger.js', 'js/parse.js', 'js/settle.js', 'js/invest.js', 'js/prices.js', 'js/util.js',
+  'js/app.js', 'js/db.js', 'js/ledger.js', 'js/parse.js', 'js/settle.js', 'js/invest.js', 'js/prices.js', 'js/util.js', 'js/lock.js',
   'vendor/dexie.min.js', 'vendor/chart.umd.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
