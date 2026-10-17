@@ -62,3 +62,28 @@ test('환율 데이터가 없으면 매수 시 환율로 평가', () => {
     [{ code: 'MSFT', date: '2026-10-01', close: 410 }], [], '2026-10-01');
   assert.equal(s[0].value, 410 * 1350);
 });
+
+import { buildStockSeries } from '../js/invest.js';
+
+test('종목별: 같은 종목은 합치고 평균 매수가·현재가·수익률', () => {
+  const r = buildStockSeries(
+    [
+      { id: 1, code: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', qty: 10, price: 60000, date: '2026-10-01', fx: 1 },
+      { id: 2, code: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', qty: 10, price: 70000, date: '2026-10-03', fx: 1 },
+      { id: 3, code: 'AAPL', name: 'AAPL', market: 'US', currency: 'USD', qty: 1, price: 100, date: '2026-10-02', fx: 1300 },
+    ],
+    [{ code: '005930', date: '2026-10-02', close: 66000 }, { code: 'AAPL', date: '2026-10-02', close: 110 }],
+    '2026-10-03',
+    [{ date: '2026-10-02', rate: 1400 }],
+  );
+  assert.deepEqual(r.dates, ['2026-10-01', '2026-10-02', '2026-10-03']);
+  const sam = r.stocks.find((s) => s.code === '005930');
+  assert.equal(sam.qty, 20);
+  assert.equal(sam.avgPrice, 65000);
+  assert.equal(sam.lastClose, 66000);
+  assert.deepEqual(sam.series, [600000, 660000, 1320000]);
+  assert.equal(sam.rate, (1320000 - 1300000) / 1300000 * 100);
+  const aapl = r.stocks.find((s) => s.code === 'AAPL');
+  assert.deepEqual(aapl.series, [null, 154000, 154000]);
+  assert.equal(aapl.principal, 130000);
+});

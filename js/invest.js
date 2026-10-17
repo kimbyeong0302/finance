@@ -83,6 +83,69 @@ function latestOn(list, date) {
   return found;
 }
 
+// 종목별 꺾은선과 표. 같은 종목코드의 여러 매수 건은 한 종목으로 합친다.
+// 반환: { dates: [...], stocks: [{ key, code, name, market, currency, qty, avgPrice, lastClose, lastDate,
+//                                  principal, value, gain, rate, series: [원화 평가액 | null] }] }
+export function buildStockSeries(holdings, prices, today, fxRates = []) {
+  if (!holdings.length) return { dates: [], stocks: [] };
+  const groups = new Map();
+  for (const h of holdings) {
+    const key = h.code ? h.code : `id:${h.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(h);
+  }
+  const firstHolding = holdings.reduce((m, h) => (h.date < m ? h.date : m), '9999-12-31');
+  const dates = new Set(holdings.map((h) => h.date));
+  for (const p of prices) if (p.date >= firstHolding && groups.has(p.code)) dates.add(p.date);
+  if (today) dates.add(today);
+  const sorted = [...dates].sort();
+
+  const byCode = new Map();
+  for (const p of [...prices].sort((a, b) => (a.date < b.date ? -1 : 1))) {
+    if (!byCode.has(p.code)) byCode.set(p.code, []);
+    byCode.get(p.code).push({ date: p.date, v: p.close });
+  }
+  const fxList = [...fxRates].sort((a, b) => (a.date < b.date ? -1 : 1)).map((r) => ({ date: r.date, v: r.rate }));
+
+  const stocks = [...groups.entries()].map(([key, lots]) => {
+    const first = lots[0];
+    const usd = first.currency === 'USD';
+    const qty = lots.reduce((s, h) => s + h.qty, 0);
+    const avgPrice = qty ? lots.reduce((s, h) => s + h.qty * h.price, 0) / qty : 0;
+    const closes = byCode.get(first.code) || [];
+    const series = sorted.map((date) => {
+      const owned = lots.filter((h) => h.date <= date);
+      if (!owned.length) return null;
+      return owned.reduce((s, h) => {
+        const close = latestOn(closes, date) ?? h.price;
+        const fx = usd ? (latestOn(fxList, date) ?? h.fx ?? 0) : 1;
+        return s + h.qty * close * fx;
+      }, 0);
+    });
+    const lastPrice = closes.length ? closes[closes.length - 1] : null;
+    const principal = lots.reduce((s, h) => s + costKRW(h), 0);
+    const value = series[series.length - 1] ?? 0;
+    return {
+      key,
+      code: first.code || '',
+      name: first.name || first.code || '직접 평가 자산',
+      market: first.market || (first.code ? 'KR' : 'NONE'),
+      currency: first.currency || 'KRW',
+      qty,
+      avgPrice,
+      lastClose: lastPrice ? lastPrice.v : null,
+      lastDate: lastPrice ? lastPrice.date : null,
+      principal,
+      value,
+      gain: value - principal,
+      rate: principal ? ((value - principal) / principal) * 100 : 0,
+      series,
+    };
+  });
+  stocks.sort((a, b) => b.value - a.value);
+  return { dates: sorted, stocks };
+}
+
 export function latestPoint(series) {
   return series.length ? series[series.length - 1] : { principal: 0, value: 0 };
 }

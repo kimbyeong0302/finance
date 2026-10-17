@@ -1,6 +1,6 @@
 // 앱 껍데기를 캐시해 오프라인에서도 열리게 한다. 데이터는 IndexedDB에 있으므로 캐시하지 않는다.
 // 파일을 바꾸면 VERSION을 올린다.
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = `my-finance-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'style.css', 'manifest.json',

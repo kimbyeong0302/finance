@@ -83,6 +83,7 @@
             <div class="invest-sub"><span class="gain" id="investGain"></span><span class="muted small" id="investPrincipal"></span></div>
           </div>
         </div>
+        <div class="sub-head" id="totalHead">전체 평가액</div>
         <div class="chart-wrap"><canvas id="investChart"></canvas></div>
         <div class="invest-empty" id="investEmpty">
           <svg viewBox="0 0 48 24" aria-hidden="true"><polyline points="2,20 14,14 24,16 34,8 46,4" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -90,6 +91,11 @@
         </div>
         <div class="chart-legend">
           <span><i class="line"></i>평가액</span><span><i class="dash"></i>원금</span>
+        </div>
+        <div id="stockSection" hidden>
+          <div class="sub-head">종목별 평가액</div>
+          <div class="chart-wrap stock-chart"><canvas id="stockChart"></canvas></div>
+          <div class="stock-table" id="stockTable"></div>
         </div>
         <div class="pill-row">
           <button class="pill" id="addHoldingBtn">+ 종목 등록</button>

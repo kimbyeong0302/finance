@@ -7,7 +7,7 @@ import {
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
 import { catchUpPrices, fxOn } from './prices.js';
-import { buildSeries, costKRW, currencyOf, latestPoint, marketOf } from './invest.js';
+import { buildSeries, buildStockSeries, costKRW, currencyOf, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -18,6 +18,7 @@ const state = {
   today: todayStr(),
   historyYm: ymOf(todayStr()),
   chart: null,
+  stockChart: null,
   lastOpenCheck: 0,
 };
 
@@ -217,7 +218,9 @@ function gainText(gain, principal) {
 async function renderInvest() {
   const series = await investSeries();
   $('#investEmpty').hidden = series.length > 0;
-  $('.chart-wrap').hidden = !series.length;
+  $('#investChart').parentElement.hidden = !series.length;
+  $('#totalHead').hidden = !series.length;
+  renderStocks();
   const last = latestPoint(series);
   const gain = last.value - last.principal;
   $('#investValue').textContent = won(last.value);
@@ -267,6 +270,84 @@ async function renderInvest() {
           backgroundColor: cssVar('--ink'), titleColor: cssVar('--ink-on'), bodyColor: cssVar('--ink-on'),
           padding: 10, cornerRadius: 10, displayColors: false,
           callbacks: { label: (c) => `${c.dataset.label} ${won(c.parsed.y)}` },
+        },
+      },
+      scales: {
+        x: { border: { display: false }, ticks: { maxTicksLimit: 4, color: cssVar('--muted'), font: { size: 11 } }, grid: { display: false } },
+        y: {
+          position: 'right', grace: '10%', border: { display: false },
+          ticks: { maxTicksLimit: 4, color: cssVar('--muted'), font: { size: 11 }, callback: (v) => shortWon(v) },
+          grid: { color: cssVar('--line') },
+        },
+      },
+    },
+  });
+}
+
+// ───────────────────────── 종목별 꺾은선 + 표 ─────────────────────────
+
+const STOCK_COLORS = ['#3182f6', '#f04452', '#ffb020', '#7048e8', '#00a6b4', '#ff7a1a', '#db2777', '#64748b'];
+
+function priceText(v, currency) {
+  if (v == null) return '시세 없음';
+  return currency === 'USD' ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${num(v)}원`;
+}
+
+function rateText(rate) {
+  const sign = rate > 0 ? '+' : rate < 0 ? '−' : '';
+  return `${sign}${Math.abs(rate).toFixed(1)}%`;
+}
+
+async function renderStocks() {
+  const [holdings, prices, fx] = await Promise.all([db.holdings.toArray(), db.prices.toArray(), db.fxRates.toArray()]);
+  const { dates, stocks } = buildStockSeries(holdings, prices, state.today, fx);
+  $('#stockSection').hidden = !stocks.length;
+  if (!stocks.length) return;
+  const color = (i) => STOCK_COLORS[i % STOCK_COLORS.length];
+
+  $('#stockTable').innerHTML = stocks.map((st, i) => {
+    const dir = st.gain > 0 ? 'up' : st.gain < 0 ? 'down' : '';
+    const sub = [st.code ? `${esc(st.code)} ${st.market === 'US' ? '🇺🇸' : '🇰🇷'}` : '직접 평가', `${Number(st.qty.toFixed(4))}주`].join(' · ');
+    return `
+      <div class="stock-row">
+        <i class="stock-dot" style="background:${color(i)}"></i>
+        <div class="stock-name"><b>${esc(st.name)}</b><span>${sub}</span></div>
+        <div class="stock-value"><b>${num(st.value)}원</b><span class="gain ${dir}">${rateText(st.rate)}</span></div>
+        <div class="stock-prices">
+          <span>매수가 <b>${priceText(st.avgPrice, st.currency)}</b></span>
+          <span>현재가 <b>${priceText(st.lastClose, st.currency)}</b>${st.lastDate ? ` <small>${dayLabel(st.lastDate, state.today)}</small>` : ''}</span>
+          <span class="gain ${dir}">${st.gain > 0 ? '+' : st.gain < 0 ? '−' : ''}${num(Math.abs(st.gain))}원</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  const data = {
+    labels: dates.map((d) => dayLabel(d, '0000-00-00')),
+    datasets: stocks.map((st, i) => ({
+      label: st.name, data: st.series, borderColor: color(i), backgroundColor: color(i),
+      borderWidth: 2, tension: 0.3, pointRadius: dates.length > 30 ? 0 : 2, pointBorderWidth: 0, spanGaps: false,
+    })),
+  };
+  if (state.stockChart) {
+    state.stockChart.data = data;
+    state.stockChart.update();
+    return;
+  }
+  state.stockChart = new Chart($('#stockChart'), {
+    type: 'line',
+    data,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 400 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: cssVar('--ink'), titleColor: cssVar('--ink-on'), bodyColor: cssVar('--ink-on'),
+          padding: 10, cornerRadius: 10, boxWidth: 8, boxHeight: 8, usePointStyle: true,
+          filter: (item) => item.parsed.y != null,
+          callbacks: { label: (c) => ` ${c.dataset.label} ${won(c.parsed.y)}` },
         },
       },
       scales: {
