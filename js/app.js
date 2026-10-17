@@ -6,7 +6,6 @@ import {
   runPendingSettlements, savingsBalance, updateCategoryBudget,
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
-import { distributeTotal } from './settle.js';
 import { catchUpPrices, fxOn } from './prices.js';
 import { computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
@@ -117,7 +116,7 @@ async function renderBudget() {
     ? `지금대로면 월말에 <b>${won(s.net)}</b>이 저축으로`
     : `지금대로면 <b class="neg">${won(-s.net)}</b> 부족 → 다음 달 감액`;
 
-  renderAllocation(view, totalFinal);
+  await renderAllocation();
 
   const box = $('#budgetBars');
   if (!view.length) {
@@ -145,80 +144,46 @@ async function renderBudget() {
 }
 
 // 전체 예산이 항목별로 어떻게 나뉘어 있는지 — 가로 누적 막대 (이번 달 최종 예산 기준)
-function renderAllocation(view, totalFinal) {
-  const box = $('#budgetAlloc');
-  const parts = view.filter((v) => v.final > 0);
-  box.hidden = !parts.length;
-  if (!parts.length) return;
-  $('#allocTotal').textContent = won(totalFinal);
-  const pct = (v) => (v.final / totalFinal) * 100;
-  $('#allocBar').innerHTML = parts.map((v) => `
-    <span style="flex-grow:${v.final};background:${esc(v.category.color)}" title="${esc(v.category.name)} ${won(v.final)} (${pct(v).toFixed(1)}%)"></span>`).join('');
-  $('#allocLegend').innerHTML = parts.map((v) => `
-    <span><i style="background:${esc(v.category.color)}"></i>${esc(v.category.name)} <b>${Math.round(pct(v))}%</b></span>`).join('');
+// 예산 계획: 설정의 총 예산과 항목 예산 (홈에서는 바꾸지 않는다)
+// 예상 저축 = 총 예산 − 항목 예산 합계. 총 예산을 정하지 않았으면 null.
+async function budgetPlan() {
+  const cats = state.categories.length ? state.categories : await activeCategories();
+  const allocated = cats.reduce((s, c) => s + (c.budget || 0), 0);
+  const total = Number(await getSetting('totalBudget', 0)) || 0;
+  return { cats, allocated, total, expected: total ? total - allocated : null };
 }
 
-// 총 예산 수정 — 새 총액을 지금 배분 비율대로 항목에 나눈다
-async function openTotalBudgetSheet() {
-  const ym = ymOf(state.today);
-  const view = await monthView(ym);
-  const cats = view.map((v) => v.category);
-  if (!cats.length) { showView('settings'); return; }
-  const current = cats.reduce((s, c) => s + (c.budget || 0), 0);
-  const totalCut = view.reduce((s, v) => s + v.cut, 0);
-  const sheet = openSheet(`
-    <h4>총 예산 수정</h4>
-    <p class="muted small">새 총 예산을 지금 배분 비율대로 항목에 나눕니다. 항목별로 따로 바꾸려면 설정 탭에서 하세요.</p>
-    <label class="amount-wrap"><input class="amount-input" id="tbAmount" inputmode="numeric" value="${num(current)}" autocomplete="off"><span>원</span></label>
-    <div class="amount-hint" id="tbHint"></div>
-    ${totalCut ? `<div class="note warn">지난달 초과로 감액된 ${won(totalCut)}은 이번 달 예산에서 따로 빠집니다.</div>` : ''}
-    <ul class="list lot-list tb-preview" id="tbPreview"></ul>
-    <button class="save" id="tbSave">저장</button>
-  `);
-  const input = sheet.querySelector('#tbAmount');
-  bindAmountInput(input, sheet.querySelector('#tbHint'));
-  input.focus();
-  input.select();
-  const plan = () => distributeTotal(cats.map((c) => ({ id: c.id, budget: c.budget || 0 })), readAmount(input));
-  const draw = () => {
-    const next = plan();
-    sheet.querySelector('#tbPreview').innerHTML = cats.map((c) => {
-      const diff = next[c.id] - (c.budget || 0);
-      return `
-      <li>
-        <span class="dot" style="background:${esc(c.color)}"></span>
-        <div class="grow">${esc(c.name)}</div>
-        <div class="sub">${num(c.budget || 0)} →</div>
-        <div class="amt">${num(next[c.id])}${diff ? `<small class="${diff > 0 ? 'up' : 'down'}"> ${diff > 0 ? '+' : '−'}${num(Math.abs(diff))}</small>` : ''}</div>
-      </li>`;
-    }).join('');
-  };
-  input.addEventListener('input', draw);
-  draw();
-  const save = async () => {
-    const total = readAmount(input);
-    if (!total) { input.focus(); return; }
-    const next = plan();
-    const before = cats.map((c) => ({ id: c.id, budget: c.budget || 0 }));
-    const apply = async (rows) => {
-      for (const r of rows) {
-        await db.categories.update(r.id, { budget: r.budget });
-        await updateCategoryBudget(r.id, r.budget, ym);
-      }
-    };
-    await apply(cats.map((c) => ({ id: c.id, budget: next[c.id] })));
-    closeSheet();
-    await refresh();
-    showToast(`총 예산 ${won(total)}`, async () => { await apply(before); await refresh(); });
-  };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
-  sheet.querySelector('#tbSave').addEventListener('click', save);
+// 총 예산이 항목별로 어떻게 나뉘어 있는지 — 가로 누적 막대. 총 예산이 있으면 남는 몫은 '예상 저축' 칸.
+async function renderAllocation() {
+  const { cats, allocated, total, expected } = await budgetPlan();
+  const box = $('#budgetAlloc');
+  const parts = cats.filter((c) => c.budget > 0).map((c) => ({ name: c.name, color: c.color, amount: c.budget }));
+  if (expected > 0) parts.push({ name: '예상 저축', color: 'var(--saving)', amount: expected, saving: true });
+  box.hidden = !parts.length;
+  if (!parts.length) return;
+  const base = Math.max(total, allocated);
+  $('#allocTotal').textContent = total ? `총 예산 ${won(total)}` : `항목 합계 ${won(allocated)}`;
+  const pct = (x) => (x.amount / base) * 100;
+  $('#allocBar').innerHTML = parts.map((x) => `
+    <span class="${x.saving ? 'alloc-saving' : ''}" style="flex-grow:${x.amount};background:${esc(x.color)}" title="${esc(x.name)} ${won(x.amount)} (${pct(x).toFixed(1)}%)"></span>`).join('');
+  $('#allocLegend').innerHTML = parts.map((x) => `
+    <span class="${x.saving ? 'alloc-saving-label' : ''}"><i style="background:${esc(x.color)}"></i>${esc(x.name)} <b>${Math.round(pct(x))}%</b></span>`).join('')
+    + (expected < 0 ? `<span class="neg">항목 예산이 총 예산보다 ${won(-expected)} 많습니다</span>` : '');
 }
 
 // ───────────────────────── 저축 막대 ─────────────────────────
 
 async function renderSavings() {
   const balance = await savingsBalance();
+  const { allocated, total, expected } = await budgetPlan();
+  const ex = $('#savingExpected');
+  ex.hidden = expected == null;
+  if (expected != null) {
+    ex.classList.toggle('neg', expected < 0);
+    ex.innerHTML = expected >= 0
+      ? `<span>이번 달 예상 저축</span><b>${won(expected)}</b><small>총 예산 ${num(total)} − 항목 예산 ${num(allocated)}</small>`
+      : `<span>이번 달 예상 저축</span><b>−${won(-expected)}</b><small>항목 예산(${num(allocated)})이 총 예산(${num(total)})보다 많습니다</small>`;
+  }
   const limit = Number(await getSetting('savingsLimit', 0)) || 0;
   const fill = $('#savingFill');
   const overEl = $('#savingOver');
@@ -1210,8 +1175,26 @@ async function renderSettings() {
   draft = (await activeCategories()).map((c) => ({ ...c }));
   drawCategoryEditor();
   $('#savingsLimit').value = num(Number(await getSetting('savingsLimit', 0)) || 0).replace(/^0$/, '');
+  $('#totalBudget').value = num(Number(await getSetting('totalBudget', 0)) || 0).replace(/^0$/, '');
+  updateTotalBudgetHint();
   $('#apiKey').value = (await getSetting('apiKey')) || '';
   $('#avKey').value = (await getSetting('avKey')) || '';
+}
+
+// 설정 화면: 총 예산 − 항목 예산 합계를 입력하는 동안 바로 보여준다
+function updateTotalBudgetHint() {
+  const total = readAmount($('#totalBudget'));
+  const allocated = draft.reduce((s, c) => s + (c.budget || 0), 0);
+  const hint = $('#totalBudgetHint');
+  hint.classList.remove('neg');
+  if (!total) {
+    hint.textContent = `총 예산에서 항목 예산 합계(지금 ${won(allocated)})를 뺀 금액이 홈 화면 저축 카드에 '이번 달 예상 저축'으로 나옵니다.`;
+  } else if (total >= allocated) {
+    hint.textContent = `항목 예산 합계 ${won(allocated)} · 예상 저축 ${won(total - allocated)}`;
+  } else {
+    hint.textContent = `항목 예산 합계(${won(allocated)})가 총 예산보다 ${won(allocated - total)} 많습니다`;
+    hint.classList.add('neg');
+  }
 }
 
 function drawCategoryEditor() {
@@ -1237,6 +1220,7 @@ function onCategoryEdit(e) {
   } else if (f === 'aliases') {
     c.aliases = e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
   } else c[f] = e.target.value;
+  if (f === 'budget') updateTotalBudgetHint();
 }
 
 async function saveSettings() {
@@ -1265,6 +1249,7 @@ async function saveSettings() {
   }
   await ensureMonth(ym);
   await setSetting('savingsLimit', readAmount($('#savingsLimit')));
+  await setSetting('totalBudget', readAmount($('#totalBudget')));
   await setSetting('apiKey', $('#apiKey').value.trim());
   await setSetting('avKey', $('#avKey').value.trim());
   await refresh();
@@ -1337,8 +1322,6 @@ function bindUI() {
   $('#savingAdd').addEventListener('click', openSavingSheet);
   $('#addHoldingBtn').addEventListener('click', () => openHoldingSheet());
   $('#addValuationBtn').addEventListener('click', openValuationSheet);
-  $('#editTotalBudget').addEventListener('click', openTotalBudgetSheet);
-  $('#editTotalBudget2').addEventListener('click', openTotalBudgetSheet);
   $('#stockTable').addEventListener('click', (e) => {
     const row = e.target.closest('[data-stock]');
     if (row) openStockEditor(row.dataset.stock);
@@ -1371,6 +1354,11 @@ function bindUI() {
     draft.push({ name: '', budget: 0, color: '#64748b', aliases: [] });
     drawCategoryEditor();
     $('#categoryEditor .cat-row:last-child [data-f=name]').focus();
+  });
+  $('#totalBudget').addEventListener('input', (e) => {
+    const digits = e.target.value.replace(/[^\d]/g, '');
+    e.target.value = digits ? Number(digits).toLocaleString('ko-KR') : '';
+    updateTotalBudgetHint();
   });
   $('#savingsLimit').addEventListener('input', (e) => {
     const digits = e.target.value.replace(/[^\d]/g, '');

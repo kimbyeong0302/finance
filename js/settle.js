@@ -38,22 +38,3 @@ export function distributeCuts(shortage, rows) {
 export function finalBudget(base, cut) {
   return Math.max(0, base - cut);
 }
-
-// 총 예산을 바꾸면 지금 배분 비율대로 항목에 나눈다.
-// 총액이 천 원 단위면 항목도 천 원 단위로 맞추고, 남는 차이는 가장 큰 항목이 가진다.
-// budgets: [{ id, budget }] → { [id]: 새 예산 }
-export function distributeTotal(budgets, total) {
-  const result = {};
-  if (!budgets.length) return result;
-  const current = budgets.reduce((s, b) => s + (b.budget || 0), 0);
-  const unit = total % 1000 === 0 ? 1000 : 1;
-  let assigned = 0;
-  for (const b of budgets) {
-    const share = current > 0 ? (b.budget || 0) / current : 1 / budgets.length;
-    result[b.id] = Math.floor((total * share) / unit) * unit;
-    assigned += result[b.id];
-  }
-  const biggest = budgets.reduce((a, b) => (current > 0 ? (b.budget > a.budget ? b : a) : a));
-  result[biggest.id] += total - assigned;
-  return result;
-}
