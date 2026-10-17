@@ -435,6 +435,16 @@ main { padding: 0 16px; }
 .sell-preview b { font-variant-numeric: tabular-nums; }
 .sell-preview div.small { justify-content: flex-end; font-size: 12px; }
 
+.total-edit { background: none; border: 0; padding: 2px 0; display: inline-flex; align-items: baseline; gap: 2px; font: inherit; }
+.headline .total-edit small { font-size: 14px; font-weight: 500; letter-spacing: -0.2px; }
+.alloc-head .total-edit { font-size: 13px; }
+.tb-preview li { gap: 8px; padding: 10px 14px; }
+.tb-preview .sub { font-size: 12px; color: var(--muted); }
+.tb-preview .amt { min-width: 92px; text-align: right; }
+.tb-preview small { font-size: 11px; font-weight: 600; display: block; }
+.tb-preview small.up { color: var(--ok); }
+.tb-preview small.down { color: var(--low); }
+
 /* ───────── 팝업 ───────── */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 30; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fade .2s; }
 .modal { background: var(--card); border-radius: 24px; padding: 24px 20px 18px; width: 100%; max-width: 360px; animation: pop .22s cubic-bezier(.2, .8, .2, 1); }

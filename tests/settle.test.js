@@ -34,3 +34,15 @@ test('감액은 0 아래로 내려가지 않음', () => {
   assert.equal(finalBudget(10000, 30000), 0);
   assert.equal(finalBudget(50000, 18000), 32000);
 });
+
+import { distributeTotal } from '../js/settle.js';
+
+test('총 예산 변경: 지금 비율대로 천 원 단위 배분, 합계 일치', () => {
+  const b = [{ id: 1, budget: 400000 }, { id: 2, budget: 60000 }, { id: 3, budget: 80000 }, { id: 4, budget: 100000 }, { id: 5, budget: 50000 }];
+  const r = distributeTotal(b, 1000000);
+  assert.equal(Object.values(r).reduce((x, y) => x + y, 0), 1000000);
+  for (const v of Object.values(r)) assert.equal(v % 1000, 0);
+  assert.deepEqual(r, { 1: 583000, 2: 86000, 3: 115000, 4: 144000, 5: 72000 });
+  const eq = distributeTotal([{ id: 1, budget: 0 }, { id: 2, budget: 0 }], 100000);
+  assert.deepEqual(eq, { 1: 50000, 2: 50000 });
+});

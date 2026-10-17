@@ -6,6 +6,7 @@ import {
   runPendingSettlements, savingsBalance, updateCategoryBudget,
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
+import { distributeTotal } from './settle.js';
 import { catchUpPrices, fxOn } from './prices.js';
 import { computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
@@ -155,6 +156,63 @@ function renderAllocation(view, totalFinal) {
     <span style="flex-grow:${v.final};background:${esc(v.category.color)}" title="${esc(v.category.name)} ${won(v.final)} (${pct(v).toFixed(1)}%)"></span>`).join('');
   $('#allocLegend').innerHTML = parts.map((v) => `
     <span><i style="background:${esc(v.category.color)}"></i>${esc(v.category.name)} <b>${Math.round(pct(v))}%</b></span>`).join('');
+}
+
+// 총 예산 수정 — 새 총액을 지금 배분 비율대로 항목에 나눈다
+async function openTotalBudgetSheet() {
+  const ym = ymOf(state.today);
+  const view = await monthView(ym);
+  const cats = view.map((v) => v.category);
+  if (!cats.length) { showView('settings'); return; }
+  const current = cats.reduce((s, c) => s + (c.budget || 0), 0);
+  const totalCut = view.reduce((s, v) => s + v.cut, 0);
+  const sheet = openSheet(`
+    <h4>총 예산 수정</h4>
+    <p class="muted small">새 총 예산을 지금 배분 비율대로 항목에 나눕니다. 항목별로 따로 바꾸려면 설정 탭에서 하세요.</p>
+    <label class="amount-wrap"><input class="amount-input" id="tbAmount" inputmode="numeric" value="${num(current)}" autocomplete="off"><span>원</span></label>
+    <div class="amount-hint" id="tbHint"></div>
+    ${totalCut ? `<div class="note warn">지난달 초과로 감액된 ${won(totalCut)}은 이번 달 예산에서 따로 빠집니다.</div>` : ''}
+    <ul class="list lot-list tb-preview" id="tbPreview"></ul>
+    <button class="save" id="tbSave">저장</button>
+  `);
+  const input = sheet.querySelector('#tbAmount');
+  bindAmountInput(input, sheet.querySelector('#tbHint'));
+  input.focus();
+  input.select();
+  const plan = () => distributeTotal(cats.map((c) => ({ id: c.id, budget: c.budget || 0 })), readAmount(input));
+  const draw = () => {
+    const next = plan();
+    sheet.querySelector('#tbPreview').innerHTML = cats.map((c) => {
+      const diff = next[c.id] - (c.budget || 0);
+      return `
+      <li>
+        <span class="dot" style="background:${esc(c.color)}"></span>
+        <div class="grow">${esc(c.name)}</div>
+        <div class="sub">${num(c.budget || 0)} →</div>
+        <div class="amt">${num(next[c.id])}${diff ? `<small class="${diff > 0 ? 'up' : 'down'}"> ${diff > 0 ? '+' : '−'}${num(Math.abs(diff))}</small>` : ''}</div>
+      </li>`;
+    }).join('');
+  };
+  input.addEventListener('input', draw);
+  draw();
+  const save = async () => {
+    const total = readAmount(input);
+    if (!total) { input.focus(); return; }
+    const next = plan();
+    const before = cats.map((c) => ({ id: c.id, budget: c.budget || 0 }));
+    const apply = async (rows) => {
+      for (const r of rows) {
+        await db.categories.update(r.id, { budget: r.budget });
+        await updateCategoryBudget(r.id, r.budget, ym);
+      }
+    };
+    await apply(cats.map((c) => ({ id: c.id, budget: next[c.id] })));
+    closeSheet();
+    await refresh();
+    showToast(`총 예산 ${won(total)}`, async () => { await apply(before); await refresh(); });
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  sheet.querySelector('#tbSave').addEventListener('click', save);
 }
 
 // ───────────────────────── 저축 막대 ─────────────────────────
@@ -1279,6 +1337,8 @@ function bindUI() {
   $('#savingAdd').addEventListener('click', openSavingSheet);
   $('#addHoldingBtn').addEventListener('click', () => openHoldingSheet());
   $('#addValuationBtn').addEventListener('click', openValuationSheet);
+  $('#editTotalBudget').addEventListener('click', openTotalBudgetSheet);
+  $('#editTotalBudget2').addEventListener('click', openTotalBudgetSheet);
   $('#stockTable').addEventListener('click', (e) => {
     const row = e.target.closest('[data-stock]');
     if (row) openStockEditor(row.dataset.stock);
