@@ -161,6 +161,8 @@
       <label class="field"><span>국내 주식 — 공공데이터포털 「금융위원회_주식시세정보」 인증키</span><input id="apiKey" type="password" autocomplete="off" placeholder="serviceKey"></label>
       <label class="field"><span>미국 주식·환율 — Alpha Vantage API 키</span><input id="avKey" type="password" autocomplete="off" placeholder="무료 키: 하루 25회"></label>
       <button class="btn ghost" id="testApi">지금 시세 받아오기</button>
+      <p class="muted small">오늘 이미 받은 미국 종목·환율도 다시 받습니다 (Alpha Vantage 무료 키는 하루 25회).</p>
+      <ul class="list" id="priceStatusList"></ul>
 
       <h3>백업</h3>
       <div class="row">

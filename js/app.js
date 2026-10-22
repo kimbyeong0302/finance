@@ -6,7 +6,7 @@ import {
   runPendingSettlements, savingsBalance, updateCategoryBudget,
 } from './ledger.js';
 import { parseAmount, parseLine } from './parse.js';
-import { catchUpPrices, fxOn } from './prices.js';
+import { catchUpPrices, fxOn, priceStatusList } from './prices.js';
 import { isLockEnabled, lockConfig, lockNow, renderLockSettings } from './lock.js';
 import { ASSET_TYPES, assetTypeOf, computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
@@ -76,10 +76,10 @@ async function onOpen() {
 }
 
 // 시세 따라잡기 — 미국 종목은 호출 사이 12초 간격이라 뒤에서 천천히 돈다
-function updatePrices() {
+function updatePrices(opts = {}) {
   const status = $('#priceStatus');
-  return catchUpPrices(state.today, { onProgress: (t) => { status.textContent = t; } }).then(async (r) => {
-    if (r.errors.length) status.textContent = `${r.errors[0].code}: ${r.errors[0].message}`;
+  return catchUpPrices(state.today, { ...opts, onProgress: (t) => { status.textContent = t; } }).then(async (r) => {
+    if (r.errors.length) status.textContent = `${r.errors[0].code}: ${r.errors[0].message}${r.errors.length > 1 ? ` (외 ${r.errors.length - 1}건 — 설정에서 확인)` : ''}`;
     else if (r.added) status.textContent = `시세 ${r.added}건 업데이트`;
     else status.textContent = await priceStatusText(r);
     renderInvest();
@@ -1573,7 +1573,27 @@ async function onHistoryClick(e) {
 
 let draft = [];
 
+// 설정: 종목별 시세 상태 (마지막 종가 날짜, 마지막 요청 결과)
+async function renderPriceStatus() {
+  const box = $('#priceStatusList');
+  const rows = await priceStatusList();
+  box.innerHTML = rows.length ? rows.map((r) => {
+    const ok = r.log ? r.log.ok : null;
+    const when = r.log ? new Date(r.log.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const price = r.lastClose == null ? '시세 없음'
+      : r.market === 'US' ? `$${r.lastClose.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+        : r.market === 'FX' ? `${r.lastClose.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원` : `${num(r.lastClose)}원`;
+    return `<li>
+      <span class="dot" style="background:${ok === false ? 'var(--over)' : r.lastDate ? 'var(--ok)' : 'var(--principal)'}"></span>
+      <div class="grow"><div>${esc(r.code)} <small class="muted">${r.market === 'US' ? '미국' : r.market === 'FX' ? '환율' : '국내'}</small></div>
+        <div class="sub">${r.log ? `${when} ${ok ? `요청 성공${r.log.rows != null ? ` · ${r.log.rows}건` : ''}` : esc(r.log.message || '실패')}` : '아직 요청 안 함'}</div></div>
+      <div class="amt">${price}<div class="sub">${r.lastDate || ''}</div></div>
+    </li>`;
+  }).join('') : '<li class="empty">시세를 받는 종목이 없습니다</li>';
+}
+
 async function renderSettings() {
+  renderPriceStatus();
   renderLockSettings($('#lockSettings'), {
     toast: showToast,
     confirm: (text) => showModal(text, [{ key: 'no', label: '아니요' }, { key: 'yes', label: '네', primary: true }]),
@@ -1695,15 +1715,15 @@ async function testPrices() {
   await setSetting('apiKey', $('#apiKey').value.trim());
   await setSetting('avKey', $('#avKey').value.trim());
   showToast('시세를 받아오는 중… (미국 종목은 종목당 12초)');
-  const r = await updatePrices();
+  const r = await updatePrices({ force: true });
   await refresh();
+  renderPriceStatus();
   if (r.skipped.includes('noHoldings')) return showModal('종목코드가 있는 투자 종목이 없습니다.', OK);
   const lines = [];
   if (r.added) lines.push(`시세 ${r.added}건을 저장했습니다.`);
   for (const x of r.errors) lines.push(`${x.code}: ${x.message}`);
   if (r.skipped.includes('noKRKey')) lines.push('국내 종목: 금융위 인증키가 없습니다.');
   if (r.skipped.includes('noUSKey')) lines.push('미국 종목: Alpha Vantage 키가 없습니다.');
-  if (r.skipped.includes('usDoneToday')) lines.push('미국 종목·환율은 오늘 이미 받았습니다 (호출 횟수 절약).');
   if (!lines.length) lines.push('새로 받은 시세가 없습니다.\n국내 종가는 다음 영업일 오후 1시 이후 반영됩니다.');
   showModal(`시세 업데이트\n${lines.join('\n')}`, OK);
 }

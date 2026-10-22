@@ -65,7 +65,8 @@ async function catchUpKR(apiKey, holdings, today) {
   const errors = [];
   for (const [code, first] of firstDate) {
     const last = await db.prices.where('code').equals(code).reverse().sortBy('date');
-    const from = last.length ? addDays(last[0].date, 1) : first;
+    // 처음 받을 때는 매수일 열흘 전부터 — 막 산 종목도 가장 최근 종가가 있어야 한다
+    const from = last.length ? addDays(last[0].date, 1) : addDays(first, -10);
     if (from > today) continue;
     try {
       const rows = await fetchCloses(apiKey, code, from, today);
@@ -74,8 +75,10 @@ async function catchUpKR(apiKey, holdings, today) {
         added += rows.length;
         await fillName(code, rows[rows.length - 1].name);
       }
+      await logPrice(code, { ok: true, rows: rows.length });
     } catch (e) {
       errors.push({ code, message: corsHint(e) });
+      await logPrice(code, { ok: false, message: corsHint(e) });
     }
   }
   if (!errors.length) await setSetting('lastPriceUpdate_KR', today);
@@ -102,12 +105,14 @@ async function fetchAV(apiKey, params) {
   return json;
 }
 
-// 미국 종목 일별 종가 (최근 100거래일). 반환: [{ code, date, close }]
-export async function fetchDailyUS(apiKey, symbol, from) {
+// 미국 종목 일별 종가 (최근 100거래일 전부). 반환: [{ code, date, close }]
+// 매수일 이전 종가도 저장한다 — 오늘 산 종목도 '가장 최근 종가'로 평가해야 하기 때문.
+// (한국 날짜가 미국보다 하루 빨라서, 매수일 이후만 남기면 막 산 종목은 시세가 하나도 안 남았다)
+export async function fetchDailyUS(apiKey, symbol) {
   const json = await fetchAV(apiKey, { function: 'TIME_SERIES_DAILY', symbol, outputsize: 'compact' });
-  const series = json['Time Series (Daily)'] || {};
+  const series = json['Time Series (Daily)'];
+  if (!series) throw new Error(`Alpha Vantage: ${symbol} 시세 응답이 비어 있습니다 (${Object.keys(json).join(', ') || '빈 응답'})`);
   return Object.entries(series)
-    .filter(([date]) => date >= from)
     .map(([date, v]) => ({ code: symbol, date, close: Number(v['4. close']) }))
     .filter((r) => Number.isFinite(r.close));
 }
@@ -115,7 +120,8 @@ export async function fetchDailyUS(apiKey, symbol, from) {
 // USD/KRW 일별 환율. 반환: [{ date, rate }]
 export async function fetchFxUSDKRW(apiKey) {
   const json = await fetchAV(apiKey, { function: 'FX_DAILY', from_symbol: 'USD', to_symbol: 'KRW', outputsize: 'compact' });
-  const series = json['Time Series FX (Daily)'] || {};
+  const series = json['Time Series FX (Daily)'];
+  if (!series) throw new Error(`Alpha Vantage: 환율 응답이 비어 있습니다 (${Object.keys(json).join(', ') || '빈 응답'})`);
   return Object.entries(series)
     .map(([date, v]) => ({ date, rate: Number(v['4. close']) }))
     .filter((r) => Number.isFinite(r.rate));
@@ -123,12 +129,12 @@ export async function fetchFxUSDKRW(apiKey) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function catchUpUS(apiKey, holdings, today, onProgress) {
+async function catchUpUS(apiKey, holdings, today, onProgress, force) {
   const fetched = (await getSetting('usFetched')) || {}; // { 티커: 마지막으로 받은 날 }
   const firstDate = firstDates(holdings);
   const jobs = [];
-  if ((await getSetting('fxFetched')) !== today) jobs.push({ kind: 'fx' });
-  for (const [code, first] of firstDate) if (fetched[code] !== today) jobs.push({ kind: 'stock', code, first });
+  if (force || (await getSetting('fxFetched')) !== today) jobs.push({ kind: 'fx' });
+  for (const [code] of firstDate) if (force || fetched[code] !== today) jobs.push({ kind: 'stock', code });
 
   let added = 0;
   const errors = [];
@@ -138,19 +144,25 @@ async function catchUpUS(apiKey, holdings, today, onProgress) {
     try {
       if (job.kind === 'fx') {
         const rows = await fetchFxUSDKRW(apiKey);
-        if (rows.length) await db.fxRates.bulkPut(rows);
-        await setSetting('fxFetched', today);
+        if (rows.length) {
+          await db.fxRates.bulkPut(rows);
+          await setSetting('fxFetched', today);
+        }
+        await logPrice('USD/KRW', { ok: rows.length > 0, rows: rows.length, message: rows.length ? '' : '받은 환율이 없습니다' });
       } else {
-        const rows = await fetchDailyUS(apiKey, job.code, job.first);
+        const rows = await fetchDailyUS(apiKey, job.code);
         if (rows.length) {
           await db.prices.bulkPut(rows);
           added += rows.length;
+          fetched[job.code] = today; // 실제로 받았을 때만 '오늘 받음'으로 표시
+          await setSetting('usFetched', fetched);
         }
-        fetched[job.code] = today;
-        await setSetting('usFetched', fetched);
+        await logPrice(job.code, { ok: rows.length > 0, rows: rows.length, message: rows.length ? '' : '받은 시세가 없습니다' });
       }
     } catch (e) {
-      errors.push({ code: job.kind === 'fx' ? 'USD/KRW' : job.code, message: corsHint(e) });
+      const code = job.kind === 'fx' ? 'USD/KRW' : job.code;
+      errors.push({ code, message: corsHint(e) });
+      await logPrice(code, { ok: false, message: corsHint(e) });
       if (e.stop || e instanceof TypeError) break; // 한도 초과·CORS면 나머지도 실패하므로 멈춘다
     }
   }
@@ -161,14 +173,49 @@ async function catchUpUS(apiKey, holdings, today, onProgress) {
 // ───────── 앱을 열 때 ─────────
 
 let running = null;
+let queued = null;
 
 // 반환: { added, errors: [{ code, message }], skipped: ['noKR', 'noUS', 'noHoldings', …] }
-export function catchUpPrices(today = todayStr(), { onProgress } = {}) {
-  if (!running) running = doCatchUp(today, onProgress).finally(() => { running = null; });
-  return running;
+// force: 오늘 이미 받은 미국 종목·환율도 다시 받는다 (설정의 '지금 시세 받아오기')
+// 이미 도는 중이면 끝난 뒤 한 번 더 돈다 — 그사이 추가한 종목도 빠지지 않게.
+export function catchUpPrices(today = todayStr(), { onProgress, force = false } = {}) {
+  if (!running) {
+    running = doCatchUp(today, onProgress, force).finally(() => { running = null; });
+    return running;
+  }
+  if (!queued) {
+    queued = running.then(() => {
+      queued = null;
+      return catchUpPrices(today, { onProgress, force });
+    });
+  }
+  return queued;
 }
 
-async function doCatchUp(today, onProgress) {
+// 종목별 마지막 시세 요청 결과 — 설정 화면에서 보여 준다
+async function logPrice(code, info) {
+  const log = (await getSetting('priceLog')) || {};
+  log[code] = { ...info, at: new Date().toISOString() };
+  await setSetting('priceLog', log);
+}
+
+export async function priceStatusList() {
+  const [holdings, log] = await Promise.all([db.holdings.toArray(), getSetting('priceLog')]);
+  const codes = [...new Set(holdings.filter((h) => h.market === 'KR' || h.market === 'US').map((h) => h.code))];
+  const rows = [];
+  for (const code of codes) {
+    const market = holdings.find((h) => h.code === code).market;
+    const last = await db.prices.where('code').equals(code).reverse().sortBy('date');
+    rows.push({ code, market, lastDate: last[0]?.date || null, lastClose: last[0]?.close ?? null, log: log?.[code] || null });
+  }
+  if (holdings.some((h) => h.market === 'US')) {
+    const fx = await db.fxRates.orderBy('date').last();
+    rows.push({ code: 'USD/KRW', market: 'FX', lastDate: fx?.date || null, lastClose: fx?.rate ?? null, log: log?.['USD/KRW'] || null });
+  }
+  return rows;
+}
+
+async function doCatchUp(today, onProgress, force) {
   const holdings = await db.holdings.toArray();
   const kr = holdings.filter((h) => h.market === 'KR' || (!h.market && /^\d{6}$/.test(h.code || '')));
   const us = holdings.filter((h) => h.market === 'US');
@@ -187,7 +234,7 @@ async function doCatchUp(today, onProgress) {
   const avKey = await getSetting('avKey');
   if (us.length && !avKey) result.skipped.push('noUSKey');
   if (us.length && avKey) {
-    const r = await catchUpUS(avKey, us, today, onProgress);
+    const r = await catchUpUS(avKey, us, today, onProgress, force);
     result.added += r.added;
     result.errors.push(...r.errors);
     if (!r.calls) result.skipped.push('usDoneToday');
