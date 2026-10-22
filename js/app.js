@@ -11,6 +11,9 @@ import { isLockEnabled, lockConfig, lockNow, renderLockSettings } from './lock.j
 import { ASSET_TYPES, assetTypeOf, computePortfolio, costKRW, currencyOf, heldQtyOn, holdingKey, latestPoint, marketOf } from './invest.js';
 import { addMonths, dayLabel, isLastDayOfMonth, monthLabel, num, todayStr, won, ymOf } from './util.js';
 
+// 앱 버전 — 설정 화면 맨 아래에 보인다 (휴대폰에 새 버전이 들어왔는지 확인용)
+export const APP_VERSION = '2026-10-22 · v14';
+
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -33,6 +36,26 @@ const DEFAULT_CATEGORIES = [
 
 // ───────────────────────── 시작 ─────────────────────────
 
+// 새 버전이 배포되면 받아서 바로 바꿔 끼운다. 앱으로 돌아올 때마다 새 버전이 있는지 확인.
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // 처음 설치될 때는 새로고침하지 않는다. 잠금 화면이나 입력 중이면 다음에 열 때 적용.
+    if (!hadController || reloaded) return;
+    if (document.documentElement.classList.contains('locked') || !$('#sheet').hidden) return;
+    reloaded = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  }).catch(() => {});
+}
+
 async function init() {
   if (!(await db.categories.count())) {
     await db.categories.bulkAdd(DEFAULT_CATEGORIES.map((c, i) => ({ ...c, order: i, archived: false })));
@@ -42,7 +65,7 @@ async function init() {
   if (await isLockEnabled()) await lockNow();
   document.documentElement.classList.remove('booting');
   await onOpen();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  registerServiceWorker();
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'hidden') {
       state.hiddenAt = Date.now();
@@ -1593,6 +1616,7 @@ async function renderPriceStatus() {
 }
 
 async function renderSettings() {
+  $('#appVersion').textContent = `앱 버전 ${APP_VERSION}`;
   renderPriceStatus();
   renderLockSettings($('#lockSettings'), {
     toast: showToast,
